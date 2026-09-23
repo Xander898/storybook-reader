@@ -65,16 +65,22 @@ export function parseLineNumber(rawText) {
  * 返回 { segments, leadingText }：
  *   - segments: [{ number, text, y0, y1 }]（y0/y1 为该段首末行的纵向范围）
  *   - leadingText: 第一个段号出现之前的无段号文本（用于跨页合并）
+ * 段内保留原文结构：识别到的每一行以换行符保留，行与行之间的空行
+ * （即原文的段落/对话分隔）保留为一个空行。
  * 段号递增校验：新候选段号必须满足 prev < n <= prev + 10，否则视为正文（如“1997年……”）
  */
 export function parsePage(lines) {
   const segments = [];
   let leadingText = '';
-  let current = null; // { number, parts: [], y0, y1 }
+  let current = null; // { number, parts: [], breakPending, y0, y1 }
 
   for (const line of lines) {
     const raw = normalizeOcrText((line.text ?? '').trim());
-    if (!raw) continue;
+    if (!raw) {
+      // 空行：段内的原文段落分隔（连续空行只记一个）
+      if (current) current.breakPending = true;
+      continue;
+    }
 
     const parsed = parseLineNumber(raw);
     const prevNum = current ? Number(current.number) : (segments.length ? Number(segments[segments.length - 1].number) : null);
@@ -92,14 +98,16 @@ export function parsePage(lines) {
 
     if (startsNew) {
       if (current) segments.push(finishSegment(current));
-      current = { number: parsed.number, parts: [parsed.rest], y0: line.y0, y1: line.y1 };
+      current = { number: parsed.number, parts: [parsed.rest], breakPending: false, y0: line.y0, y1: line.y1 };
     } else if (current) {
+      if (current.breakPending) current.parts.push(''); // 空行 → 段内段落分隔
+      current.breakPending = false;
       current.parts.push(raw);
       current.y1 = line.y1;
       if (line.y0 < current.y0) current.y0 = line.y0;
     } else {
-      // 还没有段号：页首孤行（页眉 / 跨页续文）
-      leadingText = leadingText ? joinText(leadingText, raw) : raw;
+      // 还没有段号：页首孤行（页眉 / 跨页续文），行结构同样保留
+      leadingText = leadingText ? leadingText + '\n' + raw : raw;
     }
   }
   if (current) segments.push(finishSegment(current));
@@ -108,7 +116,9 @@ export function parsePage(lines) {
 }
 
 function finishSegment(seg) {
-  return { number: seg.number, text: seg.parts.join(''), y0: seg.y0, y1: seg.y1 };
+  // 行用 \n 连接（原文行结构）；首尾多余换行去除
+  const text = seg.parts.join('\n').replace(/^\n+|\n+$/g, '');
+  return { number: seg.number, text, y0: seg.y0, y1: seg.y1 };
 }
 
 /**

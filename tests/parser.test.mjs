@@ -31,11 +31,27 @@ test('parsePage 按段号切分', () => {
   assert.equal(leadingText, '');
   assert.equal(segments.length, 2);
   assert.equal(segments[0].number, '0001');
-  assert.equal(segments[0].text, '你站在路口，左边是森林。夜色渐深，风声呼啸。');
+  assert.equal(segments[0].text, '你站在路口，左边是森林。\n夜色渐深，风声呼啸。');
   assert.equal(segments[0].y0, 10);
   assert.equal(segments[0].y1, 60);
   assert.equal(segments[1].number, '0002');
-  assert.equal(segments[1].text, '你选择了右边的小径。查看 0003 段落，继续冒险。');
+  assert.equal(segments[1].text, '你选择了右边的小径。\n查看 0003 段落，继续冒险。');
+});
+
+test('parsePage 保留原文段落结构（空行 → 段内空行）', () => {
+  const lines = [
+    { text: '0001 你推开门。', y0: 10, y1: 30 },
+    { text: '', y0: 35, y1: 36 },
+    { text: '', y0: 36, y1: 37 },
+    { text: '屋里没有人。', y0: 40, y1: 60 },
+    { text: '第二行。', y0: 70, y1: 90 },
+    { text: '0002 你离开。', y0: 100, y1: 120 },
+  ];
+  const { segments } = parsePage(lines);
+  assert.equal(segments.length, 2);
+  // 连续空行只保留一个；行结构以 \n 保留
+  assert.equal(segments[0].text, '你推开门。\n\n屋里没有人。\n第二行。');
+  assert.equal(segments[1].text, '你离开。');
 });
 
 test('parsePage 页首孤行进入 leadingText（跨页续文/页眉）', () => {
@@ -71,14 +87,14 @@ test('parsePage 容错段号 O→0 / l→1', () => {
   assert.equal(segments[1].number, '0012');
 });
 
-test('parsePage 全页无段号（整页续文）', () => {
+test('parsePage 全页无段号（整页续文，行结构保留）', () => {
   const lines = [
     { text: '故事还在继续。', y0: 10, y1: 30 },
     { text: '风停了。', y0: 40, y1: 60 },
   ];
   const { segments, leadingText } = parsePage(lines);
   assert.equal(segments.length, 0);
-  assert.equal(leadingText, '故事还在继续。风停了。');
+  assert.equal(leadingText, '故事还在继续。\n风停了。');
 });
 
 test('normalizeOcrText 清除 OCR 插入的多余空格', () => {

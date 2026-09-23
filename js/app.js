@@ -183,6 +183,89 @@ async function renderShelf() {
 // ---------------------------------------------------------------------------
 // 书详情（章节列表）
 // ---------------------------------------------------------------------------
+// 长按手势：移动端按住 ~500ms 触发；桌面右键也触发。
+// 返回 isLongPress() 供 click 处理器判断，避免长按松手后又触发点击。
+function addLongPress(node, onLongPress) {
+  let timer = null;
+  let fired = false;
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  node.addEventListener('touchstart', (e) => {
+    fired = false;
+    cancel();
+    const t = e.touches[0];
+    const x = t.clientX, y = t.clientY;
+    const move = (ev) => {
+      const tt = ev.touches[0];
+      if (Math.abs(tt.clientX - x) > 8 || Math.abs(tt.clientY - y) > 8) {
+        cancel();
+        node.removeEventListener('touchmove', move);
+      }
+    };
+    node.addEventListener('touchmove', move, { passive: true });
+    timer = setTimeout(() => {
+      timer = null;
+      fired = true;
+      if (navigator.vibrate) navigator.vibrate(15);
+      onLongPress();
+    }, 500);
+  }, { passive: true });
+  node.addEventListener('touchend', cancel);
+  node.addEventListener('touchcancel', cancel);
+  node.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse') fired = false; });
+  node.addEventListener('contextmenu', (e) => {
+    e.preventDefault(); // 屏蔽系统菜单
+    if (fired) return;  // Android：长按计时器已触发过
+    cancel();
+    fired = true;
+    onLongPress();      // 桌面右键 / iOS Safari 长按
+  });
+  return () => fired;
+}
+
+// 章节管理菜单（长按弹出）
+function showChapterActions(ch, pending) {
+  const overlay = el('div', { class: 'modal-overlay' });
+  const box = el('div', { class: 'modal action-sheet' },
+    el('p', { class: 'action-sheet-title' }, ch.title),
+    el('button', { class: 'btn action-btn', onclick: () => { overlay.remove(); showChapterEditor(ch); } }, '✎ 编辑章节名'),
+    el('button', { class: 'btn action-btn', onclick: () => { overlay.remove(); nav(`#/scan/${ch.id}`); } },
+      pending ? '📷 继续扫描' : '📷 扫描新页面'),
+    el('button', {
+      class: 'btn action-btn danger',
+      onclick: async () => {
+        overlay.remove();
+        if (await confirmDialog('删除章节', `确定删除「${ch.title}」及其中所有段落吗？`)) {
+          await db.deleteChapter(ch.id);
+          route();
+        }
+      },
+    }, '🗑 删除章节'),
+    el('button', { class: 'btn action-btn', onclick: () => overlay.remove() }, '取消'),
+  );
+  overlay.append(box);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.append(overlay);
+}
+
+function showChapterEditor(ch) {
+  const input = el('input', { class: 'input', value: ch.title, maxlength: '60' });
+  showModal('编辑章节名', input, [
+    { label: '取消', onclick: (o) => o.remove() },
+    {
+      label: '保存', class: 'primary',
+      onclick: async (o) => {
+        const title = input.value.trim();
+        if (!title) { toast('章节名不能为空'); return; }
+        await db.updateChapter(ch.id, { title });
+        o.remove();
+        route();
+      },
+    },
+  ]);
+  setTimeout(() => input.focus(), 50);
+}
+
+// ---------------------------------------------------------------------------
 async function renderBook(bookId) {
   const book = await db.getBook(bookId);
   if (!book) { nav('#/'); return; }
@@ -199,27 +282,22 @@ async function renderBook(bookId) {
     const paras = await db.listParagraphs(ch.id);
     const textCount = paras.filter((p) => p.type === 'text').length;
     const pending = paras.some((p) => p.pending);
-    list.append(el('div', { class: 'card chapter-card' },
+    const item = el('div', { class: 'card chapter-card' },
       el('div', { class: 'chapter-title' },
         el('h3', {}, ch.title),
         pending ? el('span', { class: 'badge pending-badge' }, '续扫中') : null,
       ),
       el('p', { class: 'muted' }, `${textCount} 个段落${pending ? '（上一页段落未闭合）' : ''}`),
-      el('div', { class: 'row-btns' },
-        el('button', { class: 'btn', onclick: () => nav(`#/read/${ch.id}`) }, '阅读'),
-        el('button', { class: 'btn primary', onclick: () => nav(`#/scan/${ch.id}`) }, pending ? '继续扫描' : '扫描'),
-        el('button', {
-          class: 'icon-btn danger', 'aria-label': '删除章节',
-          onclick: async () => {
-            if (await confirmDialog('删除章节', `确定删除「${ch.title}」及其中所有段落吗？`)) {
-              await db.deleteChapter(ch.id);
-              route();
-            }
-          },
-        }, '✕'),
-      ),
-    ));
+    );
+    // 点击进入段落目录；长按弹出管理菜单（编辑/扫描/删除）
+    const isLongPress = addLongPress(item, () => showChapterActions(ch, pending));
+    item.addEventListener('click', () => {
+      if (isLongPress()) return; // 长按松手后的 click 不再进入
+      nav(`#/read/${ch.id}`);
+    });
+    list.append(item);
   }
+  if (chapters.length) list.append(el('p', { class: 'muted longpress-hint' }, '点击章节进入目录 · 长按可编辑 / 扫描 / 删除'));
 
   const input = el('input', { class: 'input', placeholder: '章节名，如 第一章', maxlength: '60' });
   const form = el('div', { class: 'card new-form' },
@@ -370,7 +448,7 @@ async function renderParagraphDetail(paraId) {
 function showImportTextModal(chapterId) {
   const textarea = el('textarea', {
     class: 'input', rows: '12',
-    placeholder: '粘贴豆包等 App 识别出的书页文本…\n每行一段；行首四位数字会识别为段号',
+    placeholder: '粘贴豆包等 App 识别出的书页文本…\n行首四位数字会识别为段号；换行和空行会保留',
   });
   showModal('导入文本',
     el('div', { class: 'import-form' },

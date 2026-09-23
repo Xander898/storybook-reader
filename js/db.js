@@ -99,6 +99,18 @@ export function listChapters(bookId) {
 export function getChapter(id) {
   return tx('chapters', 'readonly', (s) => wrap(s.get(id)));
 }
+export function updateChapter(id, patch) {
+  return tx('chapters', 'readwrite', (s) => new Promise((resolve, reject) => {
+    const r = s.get(id);
+    r.onsuccess = () => {
+      if (!r.result) { resolve(null); return; }
+      const rec = { ...r.result, ...patch };
+      const w = s.put(rec);
+      w.onsuccess = () => resolve(rec);
+    };
+    r.onerror = () => reject(r.error);
+  }));
+}
 export function deleteChapter(id) {
   return openDB().then((db) => new Promise((resolve, reject) => {
     const t = db.transaction(['chapters', 'paragraphs'], 'readwrite');

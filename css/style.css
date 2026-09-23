@@ -206,6 +206,29 @@ select.input { appearance: auto; }
 /* ---------- 章节 ---------- */
 .chapter-card .chapter-title { display: flex; align-items: center; gap: 8px; }
 .chapter-card h3 { margin: 0; font-size: 16px; flex: 1; }
+/* 章节卡片：可点击（进入目录）/ 可长按（弹出管理菜单） */
+.chapter-card {
+  cursor: pointer;
+  -webkit-touch-callout: none; /* 禁用 iOS 长按系统菜单 */
+  user-select: none;
+}
+.chapter-card:active { background: var(--accent-soft); }
+.longpress-hint { text-align: center; font-size: 13px; padding: 6px 0 2px; }
+
+/* 章节长按菜单（底部操作面板） */
+.action-sheet { display: flex; flex-direction: column; gap: 8px; }
+.action-sheet-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--muted);
+  text-align: center;
+  margin: 0 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.action-btn { width: 100%; font-size: 16px; padding: 13px 0; }
+.action-btn.danger { color: var(--danger); }
 .badge {
   font-size: 11.5px;
   border-radius: 10px;
