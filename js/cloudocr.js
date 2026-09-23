@@ -1,11 +1,10 @@
 // ---------------------------------------------------------------------------
 // 云端识别：豆包（火山方舟 doubao-1.5-vision-pro）
-// 浏览器不能直连方舟 API（无 CORS），经 IGA Pages 部署的 api/ocr.js 代理转发。
-// API Key 只保存在本机 localStorage，随请求发给代理，代理不落盘。
+// 方舟 API 已支持 CORS（动态回显 Origin），浏览器直连，无需代理服务器。
+// API Key 只保存在本机 localStorage，随请求直发火山方舟。
 // ---------------------------------------------------------------------------
 
-// 代理地址（部署在 IGA Pages，与本站分离——GitHub Pages 无法承载 API 函数）
-const PROXY_URL = 'https://storybook-ocr.iga.pages.dev/api/ocr';
+const ARK_URL = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
 
 const TRANSCRIBE_PROMPT = [
   '请逐字转录这张书页图片中的全部正文文字，要求：',
@@ -41,7 +40,7 @@ async function compressForCloud(dataUrl) {
   return c.toDataURL('image/jpeg', 0.92);
 }
 
-// 请求代理。onStage(stage) 用于界面提示。
+// 直连方舟。onStage(stage) 用于界面提示。
 export async function cloudRecognize(dataUrl, onStage) {
   const key = getArkKey();
   if (!key) throw new Error('未配置豆包 API Key，请到「设置」中填写');
@@ -54,15 +53,28 @@ export async function cloudRecognize(dataUrl, onStage) {
   const timer = setTimeout(() => controller.abort(), 120000);
   let resp;
   try {
-    resp = await fetch(PROXY_URL, {
+    resp = await fetch(ARK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key, image, model: getModel(), prompt: TRANSCRIBE_PROMPT }),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: getModel(),
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: image } },
+            { type: 'text', text: TRANSCRIBE_PROMPT },
+          ],
+        }],
+        temperature: 0.1,
+      }),
       signal: controller.signal,
     });
   } catch (err) {
     if (err.name === 'AbortError') throw new Error('请求超时，请重试');
-    throw new Error('无法连接识别服务（' + err.message + '），请检查网络');
+    throw new Error('无法连接火山方舟（' + err.message + '），请检查网络');
   } finally {
     clearTimeout(timer);
   }
@@ -70,11 +82,11 @@ export async function cloudRecognize(dataUrl, onStage) {
   let data;
   try { data = await resp.json(); } catch { data = null; }
   if (!resp.ok) {
-    if (resp.status === 401) throw new Error('API Key 无效或已过期，请在设置中检查');
-    throw new Error((data && data.error) || `识别服务返回 ${resp.status}`);
+    if (resp.status === 401 || resp.status === 403) throw new Error('API Key 无效或未开通该模型，请在设置中检查');
+    throw new Error((data && data.error && data.error.message) || `方舟 API 返回 ${resp.status}`);
   }
 
-  let text = (data.text || '').trim();
+  let text = (data?.choices?.[0]?.message?.content || '').trim();
   // 去掉模型偶尔包上的代码块围栏
   text = text.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
   if (!text) throw new Error('云端未识别到文字，请重拍清晰一点');
@@ -86,23 +98,25 @@ export async function testArkKey(key) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
   try {
-    const resp = await fetch(PROXY_URL, {
+    const resp = await fetch(ARK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+      },
       body: JSON.stringify({
-        key, image: null,
         model: getModel(),
-        prompt: 'ping',
-        ping: true,
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 8,
       }),
       signal: controller.signal,
     });
     const data = await resp.json().catch(() => ({}));
     if (resp.ok) return { ok: true };
-    if (resp.status === 401) return { ok: false, error: 'API Key 无效或未开通该模型' };
-    return { ok: false, error: data.error || `服务返回 ${resp.status}` };
+    if (resp.status === 401 || resp.status === 403) return { ok: false, error: 'API Key 无效或未开通该模型' };
+    return { ok: false, error: (data && data.error && data.error.message) || `方舟返回 ${resp.status}` };
   } catch (err) {
-    return { ok: false, error: '无法连接识别服务：' + err.message };
+    return { ok: false, error: '无法连接火山方舟：' + err.message };
   } finally {
     clearTimeout(timer);
   }
