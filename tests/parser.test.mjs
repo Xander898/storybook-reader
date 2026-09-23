@@ -151,7 +151,9 @@ test('parseLineNumber 特殊段号的 OCR 误读容错', () => {
   assert.equal(parseLineNumber('9—10 骰运极差。')?.number, '9-10'); // em 破折号
   assert.equal(parseLineNumber('1一2 来此。')?.number, '1-2'); // “一”误读
   assert.equal(parseLineNumber('3 - 4 来此。')?.number, '3-4'); // 空格
-  assert.equal(parseLineNumber('9-1 不合法。'), null); // N≥M 不是范围段
+  assert.equal(parseLineNumber('9-1 不合法。'), null); // 不在白名单
+  assert.equal(parseLineNumber('10-11 不合法。'), null); // 只有固定五个范围段
+  assert.equal(parseLineNumber('2-3 不合法。'), null); // 只有固定五个范围段
   assert.notEqual(parseLineNumber('1997-2000年。')?.number, '1997-2000'); // 年份范围不会成为范围段号
   assert.equal(parseLineNumber('Apple 甘露。'), null); // 拉丁单词不吞
 });
@@ -167,13 +169,15 @@ test('normalizeNumber 段号规范化', () => {
   assert.equal(normalizeNumber('1—2'), '1-2');
   assert.equal(normalizeNumber('199'), null);
   assert.equal(normalizeNumber('2-1'), null);
+  assert.equal(normalizeNumber('2-3'), null); // 不在白名单
+  assert.equal(normalizeNumber('10-11'), null); // 不在白名单
   assert.equal(normalizeNumber(''), null);
 });
 
-test('tokenizeText 跳转到特殊段（α/Ω/N-M）', () => {
-  const toks = tokenizeText('转到1-2继续。查看α开头。翻至Ω结束。回到 7-8 段落。');
+test('tokenizeText 跳转只指向四位数字段号', () => {
+  const toks = tokenizeText('转到1-2继续。查看α开头。翻至Ω结束。回到 7-8 段落。转到0007。');
   const targets = toks.filter((t) => t.type === 'jump').map((t) => t.target);
-  assert.deepEqual(targets, ['1-2', 'α', 'Ω', '7-8']);
+  assert.deepEqual(targets, ['0007']); // α/Ω/N-M 不会被跳转引用
 });
 
 test('tokenizeText 特殊段不误伤正文', () => {
@@ -181,8 +185,8 @@ test('tokenizeText 特殊段不误伤正文', () => {
   assert.ok(!toks.some((t) => t.type === 'jump'));
 });
 
-test('stripSpeech 剔除特殊段跳转提示', () => {
-  assert.equal(stripSpeech('转到1-2。你站在路口。'), '你站在路口。');
+test('stripSpeech 剔除跳转提示', () => {
+  assert.equal(stripSpeech('查看0007。你站在路口。'), '你站在路口。'); // 残留句读一并清理
 });
 
 test('tokenizeText 切出跳转链接', () => {

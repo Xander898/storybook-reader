@@ -13,14 +13,16 @@ export function fixDigits(s) {
 const NUMBER_CANDIDATE_RE = /^[ \t　]*([0-9OolIDQ]{4})(?![0-9OolIDQ])/;
 
 // 特殊段号（部分剧情书在 0001 之前有开场/骰运/结局段）：
-//   α 章节开场段、Ω 结局段、N-M 骰运范围段（如 1-2、3-4、5-6、7-8、9-10）
+//   α 章节开场段、Ω 结局段、骰运范围段——仅固定这五个：1-2、3-4、5-6、7-8、9-10
+//   其余任何 N-M 都不是段号（如"10-11""2-3"），避免把正文里的范围表述误切段。
+const RANGE_WHITELIST = new Set(['1-2', '3-4', '5-6', '7-8', '9-10']);
 const RANGE_CANDIDATE_RE = /^[ \t　]*([0-9OolIDQ]{1,3})[ \t　]*[-—–－一~～][ \t　]*([0-9OolIDQ]{1,3})(?![0-9OolIDQ])/;
 // α/Ω 及 OCR 常见误读（a/A/ɑ、w/W/ω）；其后不能再跟拉丁字母（避免吞掉普通单词）
 const GREEK_CANDIDATE_RE = /^[ \t　]*([aAɑαwWωΩ])(?![A-Za-z])/;
 
 /**
  * 段号规范化：转为存储格式；非法返回 null。
- * 支持：四位数字（0001）、α、Ω、N-M 范围（1-2、9-10、10-11…）。
+ * 支持：四位数字（0001）、α、Ω、白名单范围段（1-2、3-4、5-6、7-8、9-10）。
  */
 export function normalizeNumber(s) {
   const t = (s ?? '').trim().replace(/[\s"'“”‘’（()]/g, '');
@@ -28,8 +30,8 @@ export function normalizeNumber(s) {
   if (/^[wWωΩ]$/.test(t)) return 'Ω';
   const r = /^([0-9OolIDQ]{1,3})[-—–－一~～]([0-9OolIDQ]{1,3})$/.exec(t);
   if (r) {
-    const a = fixDigits(r[1]), b = fixDigits(r[2]);
-    if (/^\d{1,3}$/.test(a) && /^\d{1,3}$/.test(b) && Number(a) < Number(b)) return `${a}-${b}`;
+    const key = `${fixDigits(r[1])}-${fixDigits(r[2])}`;
+    if (RANGE_WHITELIST.has(key)) return key;
   }
   const d = /^([0-9OolIDQ]{4})$/.exec(t);
   if (d) { const n = fixDigits(d[1]); if (/^\d{4}$/.test(n)) return n; }
@@ -81,7 +83,7 @@ export function parseLineNumber(rawText) {
     const number = fixDigits(m[1]);
     if (/^\d{4}$/.test(number)) return { number, rest: restAfter(rawText, m[0].length) };
   }
-  // ② 范围段号：N-M（N<M）
+  // ② 范围段号：白名单（1-2、3-4、5-6、7-8、9-10）
   const r = RANGE_CANDIDATE_RE.exec(rawText);
   if (r) {
     const number = normalizeNumber(`${r[1]}-${r[2]}`);
@@ -180,9 +182,9 @@ export function joinText(a, b) {
 
 // ---------------------------------------------------------------------------
 // 跳转链接。真实剧情书中写法多样：
-//   查看0068。 / 查看 0150 段落 / 则查看0150。 / 转到1-2 / 翻至α / 段落Ω
+//   查看0068。 / 查看 0150 段落 / 则查看0150。 / 转到0127 / 翻至0345
 //   备注“段落0003” / “段落 0047”
-// 规则：关键词（查看/段落/转到/翻至…）+ 段号（四位数字、α/Ω、N-M 范围均可）
+// 规则：关键词（查看/段落/转到/翻至…）+ 四位数字段号。
 // OCR 常把「看」误识为 眼/雨/着/罚/界/相/冈 等、「落」误识为 藕/蒂/葛/葬 等
 // （密排小字笔画粘连），因此对紧邻数字的关键字做单字容错：
 //   查眼 0013 → 仍识别为跳转。白名单式容错（而非任意字）避免把
@@ -190,12 +192,11 @@ export function joinText(a, b) {
 // ---------------------------------------------------------------------------
 
 const NUMSET = '0-9OolIDQ';
-// 特殊跳转目标：α/Ω（含误读变体）或 N-M 范围
-const SPECIAL_TARGET = `(?:[aAɑαwWωΩ]|[${NUMSET}]{1,3}[ \\t　]*[-—–－~～][ \\t　]*[${NUMSET}]{1,3})`;
+// 跳转只指向四位数字段号——α/Ω/1-2 等特殊段不会被任何跳转引用
 // 关键词（含单字误读容错）与段号之间允许出现 OCR 残留空白与引号；数字后可再跟"段落"二字
 const JUMP_RE = new RegExp(
   `(?:查看|查[眼雨着柱罚界相冈]|段落|段[藕蒂葛葬络洛]|转到|转至|翻到|翻至|回到|返回)` +
-  `[\\s"'“”‘’（(]*([${NUMSET}]{4}(?![${NUMSET}])|${SPECIAL_TARGET})` +
+  `[\\s"'“”‘’（(]*([${NUMSET}]{4})(?![${NUMSET}])` +
   `(?:[\\s"'“”‘’（(]*段落)?`,
   'g'
 );
@@ -203,7 +204,7 @@ const JUMP_RE = new RegExp(
 /**
  * 将段落正文切分为渲染 token：
  * [{ type:'text', value } | { type:'jump', value, target }]
- * target 为规范化段号（四位数字 / α / Ω / N-M）。
+ * target 为规范化段号（四位数字）。
  */
 export function tokenizeText(text) {
   const tokens = [];
