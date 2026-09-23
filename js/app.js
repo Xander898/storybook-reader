@@ -127,7 +127,13 @@ function setBottomNav(active) {
   }
 }
 
-function nav(hash) { location.hash = hash; }
+function nav(hash) {
+  location.hash = hash;
+  // 前进导航（跳转链接/上下段/进入目录）回到页面顶部：
+  // 跳转按钮多在段落末尾，不回顶会落在下文位置，朗读控制条也看不到。
+  // 返回键走 history.back()，不经过这里，原阅读位置得以保留。
+  window.scrollTo(0, 0);
+}
 
 // ---------------------------------------------------------------------------
 // 书架
