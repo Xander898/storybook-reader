@@ -43,6 +43,7 @@ html, body {
   font-size: 17px;
   font-weight: 700;
   margin: 0;
+  flex: 1; /* 占满中间空间，把右侧按钮顶到最右 */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

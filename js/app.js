@@ -106,13 +106,15 @@ async function route() {
   location.hash = '#/';
 }
 
-function setHeader(title, showBack = false) {
+function setHeader(title, showBack = false, rightBtn = null) {
   const header = $('#app-header');
   header.innerHTML = '';
   if (showBack) {
     header.append(el('button', { class: 'icon-btn', onclick: () => history.back(), 'aria-label': '返回' }, '←'));
   }
   header.append(el('h1', {}, title));
+  // 顶部右侧按钮（可选）：如段落目录页的「返回章节目录」
+  if (rightBtn) header.append(rightBtn);
 }
 
 function setBottomNav(active) {
@@ -324,7 +326,12 @@ async function renderRead(chapterId) {
   if (!chapter) { nav('#/'); return; }
   const paras = (await db.listParagraphs(chapterId)).filter((p) => p.type === 'text');
 
-  setHeader(chapter.title, true);
+  // 顶部右侧：返回章节目录（左上角返回键保持原样，仍是历史回退）
+  setHeader(chapter.title, true, el('button', {
+    class: 'icon-btn',
+    'aria-label': '返回章节目录',
+    onclick: () => nav(`#/book/${chapter.bookId}`),
+  }, '📚'));
   setBottomNav(null);
   const v = view();
   v.innerHTML = '';
