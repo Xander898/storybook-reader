@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#6d4c2f">
+  <meta name="description" content="拍照扫描剧情书，本地识别分段保存，支持跳转与朗读">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>剧情书朗读</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+  <!-- OCR 引擎（UMD，挂到 window.Tesseract；本地 vendor，无 CDN 依赖） -->
+  <script src="js/vendor/tesseract.min.js"></script>
+  <!-- PDF 渲染引擎（UMD，挂到 window.pdfjsLib；本地 vendor） -->
+  <script src="js/vendor/pdf.min.js"></script>
+</head>
+<body>
+  <header id="app-header"></header>
+  <main id="view"></main>
+  <nav id="bottom-nav">
+    <a href="#/" data-nav="shelf">📚 书架</a>
+    <a href="#/settings" data-nav="settings">⚙️ 设置</a>
+  </nav>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

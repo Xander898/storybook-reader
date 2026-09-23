@@ -1,0 +1,17 @@
+# 用户测试用书（版权内容，不入库）
+realbook.pdf
+realpage.jpg
+realpage_sim.png
+storybook-reader.zip
+
+# OCR 基准测试工作区（含大模型与用户书页扫描）
+.ocrbench/
+
+# 开发过程文档
+docs/
+
+# 依赖与构建产物
+node_modules/
+e2e/node_modules/
+e2e/*.log
+e2e/shot_*.png
