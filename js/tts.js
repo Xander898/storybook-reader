@@ -1,4 +1,8 @@
 // tts.js — Web Speech API 朗读封装
+// 移动端浏览器的 speechSynthesis.pause() 普遍不可靠（点了之后往往仍在播放），
+// 因此朗读采用「按句分块顺序播放」：
+//   暂停 = cancel 当前句并记住位置；继续 = 从该句开头重读；停止 = 清空队列。
+// 只依赖 speak / cancel 两个各平台都可靠的 API，暂停粒度为一句（几秒），可接受。
 let cachedVoices = [];
 
 export function getVoices() {
@@ -32,47 +36,98 @@ export function pickDefaultVoice(voices) {
   return voices[0] ?? null;
 }
 
-let onEndCallback = null;
+// ---------------------------------------------------------------------------
+// 分块顺序播放
+// ---------------------------------------------------------------------------
+let chunks = [];        // 按句切分的文本块
+let chunkIndex = 0;     // 当前播放到第几块
+let qVoice = null, qRate = 1, qPitch = 1;
+let qActive = false;    // 播放会话存在（朗读中或已暂停）
+let qPaused = false;
+let qOnend = null;      // 整段播完 / 被停止时的回调
+let uttGen = 0;         // 代际计数：pause/stop/resume 时递增，使旧 utterance 的回调失效（防竞态）
+
+// 按句末标点切句，一句一块（暂停粒度 = 一句话）；仅相邻极短碎片才合并，避免间隙过多
+function splitIntoChunks(text, minLen = 12) {
+  const re = /[^。！？!?；;…\n]*[。！？!?；;…\n]+|[^。！？!?；;…\n]+/g;
+  const raw = [];
+  let m;
+  while ((m = re.exec(text)) !== null) if (m[0]) raw.push(m[0]);
+  const out = [];
+  let cur = '';
+  for (const s of raw) {
+    if (cur && (cur.length >= 50 || (cur.length >= minLen && s.length >= minLen))) { out.push(cur); cur = s; }
+    else cur += s;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function speakCurrent() {
+  if (!qActive || qPaused) return;
+  if (chunkIndex >= chunks.length) {
+    qActive = false;
+    const cb = qOnend;
+    qOnend = null; chunks = [];
+    if (cb) cb(); // 全部读完
+    return;
+  }
+  const myGen = ++uttGen;
+  const u = new SpeechSynthesisUtterance(chunks[chunkIndex]);
+  if (qVoice) { u.voice = qVoice; u.lang = qVoice.lang; } else u.lang = 'zh-CN';
+  u.rate = qRate;
+  u.pitch = qPitch;
+  u.onend = () => { if (myGen !== uttGen || !qActive) return; chunkIndex += 1; speakCurrent(); };
+  u.onerror = () => { if (myGen !== uttGen || !qActive) return; chunkIndex += 1; speakCurrent(); };
+  speechSynthesis.speak(u);
+}
 
 /**
- * 朗读文本。options: { voice, rate, onend }
+ * 朗读文本。options: { voice, rate, pitch, onend }
  */
 export function speak(text, options = {}) {
   if (!ttsSupported()) return false;
   stop();
   if (!text) return false;
-  const u = new SpeechSynthesisUtterance(text);
-  if (options.voice) { u.voice = options.voice; u.lang = options.voice.lang; }
-  else u.lang = 'zh-CN';
-  u.rate = options.rate ?? 1;
-  u.pitch = options.pitch ?? 1;
-  onEndCallback = options.onend ?? null;
-  u.onend = () => { const cb = onEndCallback; onEndCallback = null; if (cb) cb(); };
-  u.onerror = () => { const cb = onEndCallback; onEndCallback = null; if (cb) cb(); };
-  speechSynthesis.speak(u);
+  chunks = splitIntoChunks(text);
+  if (!chunks.length) return false;
+  chunkIndex = 0;
+  qVoice = options.voice || null;
+  qRate = options.rate ?? 1;
+  qPitch = options.pitch ?? 1;
+  qOnend = options.onend ?? null;
+  qActive = true;
+  qPaused = false;
+  // 稍等 cancel 生效，规避部分浏览器 speak-after-cancel 静音的 bug
+  setTimeout(speakCurrent, 80);
   return true;
 }
 
+/** 停止并清空进度（下次朗读从头开始） */
 export function stop() {
   if (!ttsSupported()) return;
-  const cb = onEndCallback;
-  onEndCallback = null;
+  const cb = qOnend;
+  uttGen += 1;
+  qActive = false; qPaused = false;
+  chunks = []; chunkIndex = 0; qOnend = null;
   speechSynthesis.cancel();
   if (cb) cb(); // 主动停止时也要触发结束回调（清除高亮）
 }
 
-/** 暂停：记住当前位置，之后可 resume 继续 */
+/** 暂停：取消当前句，记住位置 */
 export function pause() {
-  if (!ttsSupported()) return;
-  if (speechSynthesis.speaking && !speechSynthesis.paused) speechSynthesis.pause();
+  if (!ttsSupported() || !qActive || qPaused) return;
+  qPaused = true;
+  uttGen += 1;              // 当前句被 cancel 后触发的 onend 不再推进进度
+  speechSynthesis.cancel();
 }
 
-/** 继续：从暂停位置恢复朗读 */
+/** 继续：从暂停所在的那一句开头重读 */
 export function resume() {
-  if (!ttsSupported()) return;
-  if (speechSynthesis.paused) speechSynthesis.resume();
+  if (!ttsSupported() || !qActive || !qPaused) return;
+  qPaused = false;
+  setTimeout(speakCurrent, 80);
 }
 
-export function speaking() {
-  return ttsSupported() && speechSynthesis.speaking && !speechSynthesis.paused;
-}
+export function paused() { return qActive && qPaused; }
+export function speaking() { return qActive && !qPaused; }

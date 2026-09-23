@@ -116,8 +116,9 @@ function setHeader(title, showBack = false) {
 }
 
 function setBottomNav(active) {
+  // null = 隐藏导航；'' = 显示但不高亮任何项；'shelf'/'settings' = 显示并高亮
   const nav = $('#bottom-nav');
-  nav.style.display = active ? '' : 'none';
+  nav.style.display = active === null ? 'none' : '';
   if (!active) return;
   for (const a of nav.querySelectorAll('a')) {
     a.classList.toggle('active', a.dataset.nav === active);
@@ -186,7 +187,7 @@ async function renderBook(bookId) {
   const book = await db.getBook(bookId);
   if (!book) { nav('#/'); return; }
   setHeader(book.title, true);
-  setBottomNav(null);
+  setBottomNav(''); // 章节页保留底部「书架/设置」入口
   const v = view();
   v.innerHTML = '';
 
