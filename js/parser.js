@@ -12,6 +12,30 @@ export function fixDigits(s) {
 // 行首段号候选：四位"数字"（含容错字符），且其后不能再紧跟数字字符（避免吞掉 5 位以上数字）
 const NUMBER_CANDIDATE_RE = /^[ \t　]*([0-9OolIDQ]{4})(?![0-9OolIDQ])/;
 
+// 特殊段号（部分剧情书在 0001 之前有开场/骰运/结局段）：
+//   α 章节开场段、Ω 结局段、N-M 骰运范围段（如 1-2、3-4、5-6、7-8、9-10）
+const RANGE_CANDIDATE_RE = /^[ \t　]*([0-9OolIDQ]{1,3})[ \t　]*[-—–－一~～][ \t　]*([0-9OolIDQ]{1,3})(?![0-9OolIDQ])/;
+// α/Ω 及 OCR 常见误读（a/A/ɑ、w/W/ω）；其后不能再跟拉丁字母（避免吞掉普通单词）
+const GREEK_CANDIDATE_RE = /^[ \t　]*([aAɑαwWωΩ])(?![A-Za-z])/;
+
+/**
+ * 段号规范化：转为存储格式；非法返回 null。
+ * 支持：四位数字（0001）、α、Ω、N-M 范围（1-2、9-10、10-11…）。
+ */
+export function normalizeNumber(s) {
+  const t = (s ?? '').trim().replace(/[\s"'“”‘’（()]/g, '');
+  if (/^[aAɑα]$/.test(t)) return 'α';
+  if (/^[wWωΩ]$/.test(t)) return 'Ω';
+  const r = /^([0-9OolIDQ]{1,3})[-—–－一~～]([0-9OolIDQ]{1,3})$/.exec(t);
+  if (r) {
+    const a = fixDigits(r[1]), b = fixDigits(r[2]);
+    if (/^\d{1,3}$/.test(a) && /^\d{1,3}$/.test(b) && Number(a) < Number(b)) return `${a}-${b}`;
+  }
+  const d = /^([0-9OolIDQ]{4})$/.exec(t);
+  if (d) { const n = fixDigits(d[1]); if (/^\d{4}$/.test(n)) return n; }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // OCR 文本规范化（chi_sim 常在汉字间插空格、数字被拆散，如"查 看 0 0 0 3 段 落"）
 // ---------------------------------------------------------------------------
@@ -47,16 +71,32 @@ export function normalizeOcrText(s) {
 
 /**
  * 解析一行是否以段号开头。
- * 返回 null 或 { number, rest }；number 已做容错修复。
+ * 返回 null 或 { number, rest, special? }；number 已做容错修复。
+ * special 标记 α/Ω/N-M 这类特殊段号（不参与四位数字的递增校验）。
  */
 export function parseLineNumber(rawText) {
+  // ① 四位数字段号（优先）
   const m = NUMBER_CANDIDATE_RE.exec(rawText);
-  if (!m) return null;
-  const number = fixDigits(m[1]);
-  // 修复后必须是纯数字
-  if (!/^\d{4}$/.test(number)) return null;
-  const rest = rawText.slice(m[0].length).replace(/^[ \t　.,、:："'’”()（）\[\]【】•·-]+/, '');
-  return { number, rest };
+  if (m) {
+    const number = fixDigits(m[1]);
+    if (/^\d{4}$/.test(number)) return { number, rest: restAfter(rawText, m[0].length) };
+  }
+  // ② 范围段号：N-M（N<M）
+  const r = RANGE_CANDIDATE_RE.exec(rawText);
+  if (r) {
+    const number = normalizeNumber(`${r[1]}-${r[2]}`);
+    if (number) return { number, special: true, rest: restAfter(rawText, r[0].length) };
+  }
+  // ③ 希腊字母段号：α（开场）/ Ω（结局）
+  const g = GREEK_CANDIDATE_RE.exec(rawText);
+  if (g) {
+    return { number: /[aAɑα]/.test(g[1]) ? 'α' : 'Ω', special: true, rest: restAfter(rawText, g[0].length) };
+  }
+  return null;
+}
+
+function restAfter(rawText, offset) {
+  return rawText.slice(offset).replace(/^[ \t　.,、:："'’”()（）\[\]【】•·-]+/, '');
 }
 
 /**
@@ -67,12 +107,15 @@ export function parseLineNumber(rawText) {
  *   - leadingText: 第一个段号出现之前的无段号文本（用于跨页合并）
  * 段内保留原文结构：识别到的每一行以换行符保留，行与行之间的空行
  * （即原文的段落/对话分隔）保留为一个空行。
- * 段号递增校验：新候选段号必须满足 prev < n <= prev + 10，否则视为正文（如“1997年……”）
+ * 段号递增校验只作用于四位数字段号：新候选必须满足 prev < n <= prev + 10，
+ * 否则视为正文（如“1997年……”）。特殊段号（α/Ω/N-M）不参与该链，
+ * 总是独立成段，且不影响数字链（α 段之后的 0001 仍能正常开段）。
  */
 export function parsePage(lines) {
   const segments = [];
   let leadingText = '';
   let current = null; // { number, parts: [], breakPending, y0, y1 }
+  let lastNumeric = null; // 最近一次接受的四位数字段号（特殊段号不计入）
 
   for (const line of lines) {
     const raw = normalizeOcrText((line.text ?? '').trim());
@@ -83,21 +126,26 @@ export function parsePage(lines) {
     }
 
     const parsed = parseLineNumber(raw);
-    const prevNum = current ? Number(current.number) : (segments.length ? Number(segments[segments.length - 1].number) : null);
 
     let startsNew = false;
     if (parsed) {
-      const n = Number(parsed.number);
-      if (prevNum === null) {
-        // 首个段号：直接接受（用户书内段号零填充 0001 起；若首行恰是年份等，可在编辑界面修正）
+      if (parsed.special) {
+        // α/Ω/N-M 特殊段号：总是新起一段
         startsNew = true;
-      } else if (n > prevNum && n <= prevNum + 10) {
-        startsNew = true;
+      } else {
+        const n = Number(parsed.number);
+        if (lastNumeric === null) {
+          // 首个数字段号：直接接受（若首行恰是年份等，可在编辑界面修正）
+          startsNew = true;
+        } else if (n > lastNumeric && n <= lastNumeric + 10) {
+          startsNew = true;
+        }
       }
     }
 
     if (startsNew) {
       if (current) segments.push(finishSegment(current));
+      if (!parsed.special) lastNumeric = Number(parsed.number);
       current = { number: parsed.number, parts: [parsed.rest], breakPending: false, y0: line.y0, y1: line.y1 };
     } else if (current) {
       if (current.breakPending) current.parts.push(''); // 空行 → 段内段落分隔
@@ -132,9 +180,9 @@ export function joinText(a, b) {
 
 // ---------------------------------------------------------------------------
 // 跳转链接。真实剧情书中写法多样：
-//   查看0068。 / 查看 0150 段落 / 则查看0150。
+//   查看0068。 / 查看 0150 段落 / 则查看0150。 / 转到1-2 / 翻至α / 段落Ω
 //   备注“段落0003” / “段落 0047”
-// 规则：关键词「查看」或「段落」之一 + 四位段号（"段落"可在数字前或后）。
+// 规则：关键词（查看/段落/转到/翻至…）+ 段号（四位数字、α/Ω、N-M 范围均可）
 // OCR 常把「看」误识为 眼/雨/着/罚/界/相/冈 等、「落」误识为 藕/蒂/葛/葬 等
 // （密排小字笔画粘连），因此对紧邻数字的关键字做单字容错：
 //   查眼 0013 → 仍识别为跳转。白名单式容错（而非任意字）避免把
@@ -142,16 +190,20 @@ export function joinText(a, b) {
 // ---------------------------------------------------------------------------
 
 const NUMSET = '0-9OolIDQ';
-// 关键词（含单字误读容错）与数字之间允许出现 OCR 残留空白与引号；数字后可再跟"段落"二字
+// 特殊跳转目标：α/Ω（含误读变体）或 N-M 范围
+const SPECIAL_TARGET = `(?:[aAɑαwWωΩ]|[${NUMSET}]{1,3}[ \\t　]*[-—–－~～][ \\t　]*[${NUMSET}]{1,3})`;
+// 关键词（含单字误读容错）与段号之间允许出现 OCR 残留空白与引号；数字后可再跟"段落"二字
 const JUMP_RE = new RegExp(
-  `(?:查看|段落|查[眼雨着柱罚界相冈]|段[藕蒂葛葬络洛])[\\s"'“”‘’（(]*[${NUMSET}]{4}(?:[\\s"'“”‘’（(]*段落)?`,
+  `(?:查看|查[眼雨着柱罚界相冈]|段落|段[藕蒂葛葬络洛]|转到|转至|翻到|翻至|回到|返回)` +
+  `[\\s"'“”‘’（(]*([${NUMSET}]{4}(?![${NUMSET}])|${SPECIAL_TARGET})` +
+  `(?:[\\s"'“”‘’（(]*段落)?`,
   'g'
 );
 
 /**
  * 将段落正文切分为渲染 token：
  * [{ type:'text', value } | { type:'jump', value, target }]
- * target 为容错修复后的四位段号。
+ * target 为规范化段号（四位数字 / α / Ω / N-M）。
  */
 export function tokenizeText(text) {
   const tokens = [];
@@ -159,8 +211,7 @@ export function tokenizeText(text) {
   let m, last = 0;
   while ((m = JUMP_RE.exec(text)) !== null) {
     if (m.index > last) tokens.push({ type: 'text', value: text.slice(last, m.index) });
-    const dm = m[0].match(new RegExp(`[${NUMSET}]{4}`));
-    tokens.push({ type: 'jump', value: m[0], target: fixDigits(dm[0]) });
+    tokens.push({ type: 'jump', value: m[0], target: normalizeNumber(m[1]) ?? fixDigits(m[1]) });
     last = m.index + m[0].length;
   }
   if (last < text.length) tokens.push({ type: 'text', value: text.slice(last) });
@@ -169,7 +220,12 @@ export function tokenizeText(text) {
 
 /**
  * 朗读文本：剔除跳转提示（朗读时无需读出"查看0068""段落0003"等指令）。
+ * 剔除后残留的重复/行首句读一并清理。
  */
 export function stripSpeech(text) {
-  return text.replace(JUMP_RE, '').replace(/\s{2,}/g, ' ').trim();
+  return text.replace(JUMP_RE, '')
+    .replace(/[。，、；]{2,}/g, '。')
+    .replace(/^[。，、；]+/, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }

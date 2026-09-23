@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fixDigits, parseLineNumber, parsePage, joinText, normalizeOcrText,
-  tokenizeText, stripSpeech,
+  tokenizeText, stripSpeech, normalizeNumber,
 } from '../js/parser.js';
 
 test('fixDigits 容错替换', () => {
@@ -121,6 +121,68 @@ test('joinText 拼接规则', () => {
   assert.equal(joinText('你听到', '声音'), '你听到声音');
   assert.equal(joinText('HP 10', 'MP 5'), 'HP 10 MP 5');
   assert.equal(joinText('获得 item', 'sword'), '获得 item sword');
+});
+
+test('parsePage 特殊段号：α / N-M 范围 / Ω 在 0001 之前独立成段', () => {
+  const lines = [
+    { text: 'α 你翻开这本宿命的迷境，命运从此开始。', y0: 10, y1: 30 },
+    { text: '1-2 骰出 1 或 2 时，你在此醒转。', y0: 40, y1: 60 },
+    { text: '3-4 骰出 3 或 4 时，你在此醒转。', y0: 70, y1: 90 },
+    { text: '5-6 骰出 5 或 6 时，你在此醒转。', y0: 100, y1: 120 },
+    { text: '7-8 骰出 7 或 8 时，你在此醒转。', y0: 130, y1: 150 },
+    { text: '9-10 骰出 9 或 10 时，你在此醒转。', y0: 160, y1: 180 },
+    { text: 'Ω 你死了，冒险到此结束。', y0: 190, y1: 210 },
+    { text: '0001 你站在迷宫入口，查看0007。', y0: 220, y1: 240 },
+    { text: '风声呼啸。', y0: 250, y1: 270 },
+    { text: '0002 你走进黑暗。', y0: 280, y1: 300 },
+  ];
+  const { segments } = parsePage(lines);
+  assert.equal(segments.length, 9);
+  assert.deepEqual(segments.map((s) => s.number),
+    ['α', '1-2', '3-4', '5-6', '7-8', '9-10', 'Ω', '0001', '0002']);
+  assert.equal(segments[7].text, '你站在迷宫入口，查看0007。\n风声呼啸。');
+});
+
+test('parseLineNumber 特殊段号的 OCR 误读容错', () => {
+  assert.equal(parseLineNumber('a你推开门。')?.number, 'α');
+  assert.equal(parseLineNumber('A 你推开门。')?.number, 'α');
+  assert.equal(parseLineNumber('W 你死了。')?.number, 'Ω');
+  assert.equal(parseLineNumber('ω 你死了。')?.number, 'Ω');
+  assert.equal(parseLineNumber('9—10 骰运极差。')?.number, '9-10'); // em 破折号
+  assert.equal(parseLineNumber('1一2 来此。')?.number, '1-2'); // “一”误读
+  assert.equal(parseLineNumber('3 - 4 来此。')?.number, '3-4'); // 空格
+  assert.equal(parseLineNumber('9-1 不合法。'), null); // N≥M 不是范围段
+  assert.notEqual(parseLineNumber('1997-2000年。')?.number, '1997-2000'); // 年份范围不会成为范围段号
+  assert.equal(parseLineNumber('Apple 甘露。'), null); // 拉丁单词不吞
+});
+
+test('normalizeNumber 段号规范化', () => {
+  assert.equal(normalizeNumber('0001'), '0001');
+  assert.equal(normalizeNumber('O0O2'), '0002');
+  assert.equal(normalizeNumber('α'), 'α');
+  assert.equal(normalizeNumber('a'), 'α');
+  assert.equal(normalizeNumber('Ω'), 'Ω');
+  assert.equal(normalizeNumber('w'), 'Ω');
+  assert.equal(normalizeNumber('9-10'), '9-10');
+  assert.equal(normalizeNumber('1—2'), '1-2');
+  assert.equal(normalizeNumber('199'), null);
+  assert.equal(normalizeNumber('2-1'), null);
+  assert.equal(normalizeNumber(''), null);
+});
+
+test('tokenizeText 跳转到特殊段（α/Ω/N-M）', () => {
+  const toks = tokenizeText('转到1-2继续。查看α开头。翻至Ω结束。回到 7-8 段落。');
+  const targets = toks.filter((t) => t.type === 'jump').map((t) => t.target);
+  assert.deepEqual(targets, ['1-2', 'α', 'Ω', '7-8']);
+});
+
+test('tokenizeText 特殊段不误伤正文', () => {
+  const toks = tokenizeText('那是1997年，1-2个小时后他走了。');
+  assert.ok(!toks.some((t) => t.type === 'jump'));
+});
+
+test('stripSpeech 剔除特殊段跳转提示', () => {
+  assert.equal(stripSpeech('转到1-2。你站在路口。'), '你站在路口。');
 });
 
 test('tokenizeText 切出跳转链接', () => {

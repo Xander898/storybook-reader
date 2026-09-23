@@ -810,13 +810,13 @@ function drawScanEditing(wrap) {
     editArea.append(el('div', { class: 'empty-hint' }, '本页没有识别到段号。若整页都是上一段的续文，直接保存即可。'));
   }
   pageData.segments.forEach((seg, i) => {
-    const numInput = el('input', { class: 'input seg-num', value: seg.number, maxlength: '4' });
+    const numInput = el('input', { class: 'input seg-num', value: seg.number, maxlength: '7' });
     const textarea = el('textarea', { class: 'input', rows: '4' });
     textarea.value = seg.text;
     numInput.addEventListener('change', () => {
-      const fixed = parser.fixDigits(numInput.value.trim());
-      if (/^\d{4}$/.test(fixed)) { seg.number = fixed; numInput.value = fixed; }
-      else toast('段号需为四位数字');
+      const fixed = parser.normalizeNumber(numInput.value);
+      if (fixed) { seg.number = fixed; numInput.value = fixed; }
+      else toast('段号需为四位数字、N-M 范围（如 9-10）或 α/Ω');
     });
     textarea.addEventListener('input', () => { seg.text = textarea.value; });
     editArea.append(el('div', { class: 'card seg-card' },
@@ -919,7 +919,7 @@ async function saveCurrentPage() {
   const leadEl = $('#lead-text');
   let leadingText = leadEl ? leadEl.value.trim() : (pageData.leadingText || '');
   const segments = pageData.segments
-    .map((s) => ({ ...s, number: s.number ? parser.fixDigits(s.number) : null }))
+    .map((s) => ({ ...s, number: s.number ? (parser.normalizeNumber(s.number) ?? s.number) : null }))
     .filter((s) => s.text.trim() || s.number);
 
   const pendingP = await db.getPendingParagraph(chapterId);
