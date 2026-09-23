@@ -85,6 +85,7 @@ const routes = [
   { re: /^#\/$/, fn: renderShelf },
   { re: /^#\/book\/(\d+)$/, fn: (m) => renderBook(Number(m[1])) },
   { re: /^#\/read\/(\d+)$/, fn: (m) => renderRead(Number(m[1])) },
+  { re: /^#\/para\/(\d+)$/, fn: (m) => renderParagraphDetail(Number(m[1])) },
   { re: /^#\/scan\/(\d+)$/, fn: (m) => renderScan(Number(m[1])) },
   { re: /^#\/settings$/, fn: renderSettings },
 ];
@@ -231,107 +232,163 @@ async function renderBook(bookId) {
 }
 
 // ---------------------------------------------------------------------------
-// 章节阅读
+// 章节段落目录（一级导航）：全部段落列表，点击进入段落详情
 // ---------------------------------------------------------------------------
 async function renderRead(chapterId) {
   const chapter = await db.getChapter(chapterId);
   if (!chapter) { nav('#/'); return; }
-  const paras = await db.listParagraphs(chapterId);
-  const voiceList = await tts.getVoices();
-  const voice = await currentVoice(voiceList);
+  const paras = (await db.listParagraphs(chapterId)).filter((p) => p.type === 'text');
 
   setHeader(chapter.title, true);
   setBottomNav(null);
   const v = view();
   v.innerHTML = '';
 
-  // 顶部操作条
   const toolbar = el('div', { class: 'toolbar' },
-    el('button', {
-      class: 'btn small',
-      onclick: () => showTocModal(paras),
-    }, '目录'),
     el('button', { class: 'btn small', onclick: () => nav(`#/scan/${chapterId}`) }, '继续扫描'),
+    el('button', { class: 'btn small', onclick: () => showImportTextModal(chapterId) }, '导入文本'),
   );
 
-  const container = el('div', { class: 'read-list' });
-  if (!paras.length) container.append(el('div', { class: 'empty-hint' }, '本章节还没有内容，去扫描几页吧'));
-
+  const list = el('div', { class: 'card para-toc' });
+  if (!paras.length) {
+    list.append(el('div', { class: 'empty-hint' }, '本章节还没有内容，去扫描几页或导入文本吧'));
+  }
   for (const p of paras) {
-    if (p.type !== 'text') continue;
-    const para = el('div', { class: 'para text-para', dataset: { pid: p.id } });
-    const numBadge = el('button', {
-      class: 'para-number' + (p.number ? '' : ' no-number'),
-      title: '点击编辑本段',
-      onclick: () => showParagraphEditor(p, chapterId),
-    }, p.number || '—');
-
-    const body = el('p', { class: 'para-body' });
-    for (const token of parser.tokenizeText(p.text)) {
-      if (token.type === 'jump') {
-        body.append(el('button', {
-          class: 'jump-link',
-          dataset: { target: token.target },
-          onclick: (e) => jumpToParagraph(e.currentTarget, container, token.target),
-        }, token.value));
-      } else {
-        body.append(token.value);
-      }
-    }
-
-    const speakBtn = el('button', {
-      class: 'icon-btn speak-btn', 'aria-label': '朗读本段',
-      onclick: () => toggleSpeak(p, voice, para, speakBtn),
-    }, '▶ 朗读');
-
-    para.append(el('div', { class: 'para-head' }, numBadge, speakBtn), body);
-    container.append(para);
-  }
-
-  v.append(toolbar, container);
-}
-
-function jumpToParagraph(linkEl, container, target) {
-  for (const node of container.querySelectorAll('.text-para')) {
-    const badge = node.querySelector('.para-number');
-    if (badge && badge.textContent === target) {
-      node.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      node.classList.remove('flash');
-      void node.offsetWidth; // 重启动画
-      node.classList.add('flash');
-      return;
-    }
-  }
-  toast(`未找到段落 ${target}`);
-}
-
-function showTocModal(paras) {
-  const list = el('div', { class: 'toc-list' });
-  const texts = paras.filter((p) => p.type === 'text');
-  if (!texts.length) list.append(el('div', { class: 'empty-hint' }, '暂无段落'));
-  for (const p of texts) {
-    const brief = p.text.length > 24 ? p.text.slice(0, 24) + '…' : (p.text || '（空段落）');
-    list.append(el('button', {
-      class: 'toc-item',
-      onclick: (e) => {
-        e.currentTarget.closest('.modal-overlay')?.remove();
-        const target = document.querySelector(`.text-para[data-pid="${p.id}"]`);
-        if (target) {
-          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          target.classList.remove('flash');
-          void target.offsetWidth;
-          target.classList.add('flash');
-        }
-      },
-    },
+    const brief = p.text.length > 30 ? p.text.slice(0, 30) + '…' : (p.text || '（空段落）');
+    list.append(el('button', { class: 'toc-item', onclick: () => nav(`#/para/${p.id}`) },
       el('span', { class: 'toc-number' }, p.number || '—'),
-      el('span', {}, brief),
+      el('span', { class: 'toc-brief' }, brief),
     ));
   }
-  showModal('章节目录', list, [{ label: '关闭', onclick: (o) => o.remove() }]);
+
+  v.append(toolbar, list);
 }
 
-function showParagraphEditor(p, chapterId) {
+// ---------------------------------------------------------------------------
+// 段落详情（二级导航）：正文大字阅读 + 跳转 + 朗读 + 编辑/删除
+// ---------------------------------------------------------------------------
+async function renderParagraphDetail(paraId) {
+  const p = await db.getParagraph(paraId);
+  if (!p || p.type !== 'text') { nav('#/'); return; }
+  const chapter = await db.getChapter(p.chapterId);
+  if (!chapter) { nav('#/'); return; }
+  const paras = (await db.listParagraphs(p.chapterId)).filter((x) => x.type === 'text');
+  const idx = paras.findIndex((x) => x.id === p.id);
+  const voice = await currentVoice();
+
+  setHeader(p.number ? `${chapter.title} · ${p.number}` : chapter.title, true);
+  setBottomNav(null);
+  const v = view();
+  v.innerHTML = '';
+
+  const body = el('p', { class: 'para-detail-body' });
+  for (const token of parser.tokenizeText(p.text)) {
+    if (token.type === 'jump') {
+      body.append(el('button', {
+        class: 'jump-link',
+        onclick: () => {
+          const dest = paras.find((x) => x.number === token.target);
+          if (dest) nav(`#/para/${dest.id}`);
+          else toast(`未找到段落 ${token.target}`);
+        },
+      }, token.value));
+    } else {
+      body.append(token.value);
+    }
+  }
+
+  const speakBtn = el('button', { class: 'btn', onclick: () => toggleSpeak(p, voice, card, speakBtn) }, '▶ 朗读本段');
+  const card = el('div', { class: 'card para-detail text-para' },
+    body,
+    el('div', { class: 'row-btns detail-btns' },
+      speakBtn,
+      el('button', { class: 'btn', onclick: () => showParagraphEditor(p) }, '✎ 编辑'),
+      el('button', {
+        class: 'btn danger',
+        onclick: async () => {
+          if (await confirmDialog('删除段落', '确定删除这个段落吗？')) {
+            await db.deleteParagraph(p.id);
+            nav(`#/read/${p.chapterId}`);
+          }
+        },
+      }, '🗑 删除'),
+    ),
+  );
+
+  const prev = paras[idx - 1], next = paras[idx + 1];
+  const navBtns = el('div', { class: 'row-btns detail-nav-btns' },
+    prev ? el('button', { class: 'btn big', onclick: () => nav(`#/para/${prev.id}`) }, '← 上一段') : null,
+    next ? el('button', { class: 'btn big primary', onclick: () => nav(`#/para/${next.id}`) }, '下一段 →') : null,
+  );
+
+  v.append(card, navBtns);
+}
+
+// ---------------------------------------------------------------------------
+// 文本导入：粘贴豆包等外部 App 识别的高精度文本，按段号切分入库
+// ---------------------------------------------------------------------------
+function showImportTextModal(chapterId) {
+  const textarea = el('textarea', {
+    class: 'input', rows: '12',
+    placeholder: '粘贴豆包等 App 识别出的书页文本…\n每行一段；行首四位数字会识别为段号',
+  });
+  showModal('导入文本',
+    el('div', { class: 'import-form' },
+      el('p', { class: 'muted' }, '外部识别的准确率通常更高，粘贴后自动按段号切分为段落。可以多次导入，自动续接。'),
+      textarea,
+    ),
+    [
+      {
+        label: '导入', class: 'primary',
+        onclick: async (o) => {
+          const text = textarea.value.trim();
+          if (!text) { toast('请先粘贴文本'); return; }
+          try {
+            const r = await importChapterText(chapterId, text);
+            o.remove();
+            toast(r.merged ? '已拼接到未闭合段落' : `已导入 ${r.count} 个段落`);
+            route();
+          } catch (err) {
+            toast('导入失败：' + err.message);
+          }
+        },
+      },
+      { label: '取消', onclick: (o) => o.remove() },
+    ]);
+}
+
+async function importChapterText(chapterId, text) {
+  const lines = text.split(/\r?\n/).map((t) => ({ text: t }));
+  const page = parser.parsePage(lines);
+  const segs = page.segments.map((s) => ({ ...s }));
+  let leading = page.leadingText;
+  let merged = false;
+
+  // 跨页续接逻辑与扫描入库一致
+  const pendingP = await db.getPendingParagraph(chapterId);
+  if (pendingP) {
+    if (leading) {
+      await db.updateParagraph(pendingP.id, { text: parser.joinText(pendingP.text, leading) });
+      leading = '';
+      merged = true;
+    }
+    if (segs.length) await db.updateParagraph(pendingP.id, { pending: false });
+  } else if (leading && segs.length) {
+    segs[0].text = parser.joinText(leading, segs[0].text);
+    leading = '';
+  }
+
+  if (segs.length) {
+    await db.addParagraphs(chapterId, segs.map((s, i) => ({
+      type: 'text', number: s.number, text: s.text, pending: i === segs.length - 1,
+    })));
+  } else if (leading) {
+    await db.addParagraphs(chapterId, [{ type: 'text', number: null, text: leading, pending: true }]);
+  }
+  return { count: segs.length, merged };
+}
+
+function showParagraphEditor(p) {
   const textarea = el('textarea', { class: 'input', rows: '6' });
   textarea.value = p.text;
   const numInput = el('input', { class: 'input num-input', maxlength: '4', placeholder: '段号' });
@@ -350,7 +407,7 @@ function showParagraphEditor(p, chapterId) {
           if (await confirmDialog('删除段落', '确定删除这个段落吗？')) {
             await db.deleteParagraph(p.id);
             o.remove();
-            route();
+            nav(`#/read/${p.chapterId}`);
           }
         },
       },

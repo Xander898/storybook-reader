@@ -217,6 +217,22 @@ select.input { appearance: auto; }
 .toolbar { display: flex; gap: 10px; margin-bottom: 12px; }
 .read-list { display: flex; flex-direction: column; gap: 12px; }
 
+/* 段落目录（一级导航） */
+.para-toc { padding: 8px; }
+.para-toc .toc-item { font-size: 15px; padding: 11px 10px; border-bottom: 1px solid rgba(109, 76, 47, 0.08); }
+.para-toc .toc-item:last-child { border-bottom: none; }
+.toc-brief {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 段落详情（二级导航） */
+.para-detail-body { margin: 4px 0 6px; font-size: 18px; line-height: 1.95; white-space: pre-wrap; }
+.detail-btns { margin-top: 14px; }
+.detail-nav-btns { margin-top: 16px; }
+
 .para {
   background: var(--card);
   border-radius: var(--radius);

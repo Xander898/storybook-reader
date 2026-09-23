@@ -20,6 +20,9 @@ const CJK_CHARS = '\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uff00-\\uffef\
 const CJK_GAP_RE = new RegExp(`([${CJK_CHARS}])[ \\t　]+([${CJK_CHARS}])`, 'g');
 const DIGIT_GAP_RE = /(\d)[ \t　]+(\d)/g;
 
+// 半角标点 → 全角（中文书原版排印为全角；OCR 常输出半角，统一归一化便于阅读与比对）
+const HALF_TO_FULL = { ',': '，', ':': '：', ';': '；', '?': '？', '!': '！', '(': '（', ')': '）' };
+
 /**
  * 清除 OCR 插入的多余空格：两个中日韩字符（含中文标点）之间的空白、
  * 被拆散数字串中的空白；ASCII 单词两侧的空格保留。
@@ -28,6 +31,7 @@ const DIGIT_GAP_RE = /(\d)[ \t　]+(\d)/g;
  */
 export function normalizeOcrText(s) {
   let out = s, prev;
+  out = out.replace(/[,;:?!()]/g, (ch) => HALF_TO_FULL[ch]);
   do {
     prev = out;
     out = out.replace(CJK_GAP_RE, '$1$2').replace(DIGIT_GAP_RE, '$1$2');

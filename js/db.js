@@ -153,6 +153,10 @@ export function listParagraphs(chapterId) {
     .then((list) => list.sort((a, b) => a.seq - b.seq));
 }
 
+export function getParagraph(id) {
+  return tx('paragraphs', 'readonly', (s) => wrap(s.get(id)));
+}
+
 export function updateParagraph(id, patch) {
   return openDB().then((db) => new Promise((resolve, reject) => {
     const t = db.transaction('paragraphs', 'readwrite');
