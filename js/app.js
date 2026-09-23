@@ -260,10 +260,9 @@ async function renderRead(chapterId) {
     list.append(el('div', { class: 'empty-hint' }, '本章节还没有内容，去扫描几页或导入文本吧'));
   }
   for (const p of paras) {
-    const brief = p.text.length > 30 ? p.text.slice(0, 30) + '…' : (p.text || '（空段落）');
+    // 目录只显示段号，紧凑网格一屏可见更多段落
     list.append(el('button', { class: 'toc-item', onclick: () => nav(`#/para/${p.id}`) },
-      el('span', { class: 'toc-number' }, p.number || '—'),
-      el('span', { class: 'toc-brief' }, brief),
+      p.number || '—',
     ));
   }
 
@@ -303,11 +302,45 @@ async function renderParagraphDetail(paraId) {
     }
   }
 
-  const speakBtn = el('button', { class: 'btn', onclick: () => toggleSpeak(p, voice, card, speakBtn) }, '▶ 朗读本段');
+  // —— 朗读控制条（置顶，无需滚到页底即可操作） ——
+  // speakState: idle（未朗读）→ playing（朗读中，可暂停）→ paused（已暂停，可继续）
+  let speakState = 'idle';
+  const speakBtn = el('button', { class: 'btn primary' }, '▶ 朗读本段');
+  const stopBtn = el('button', { class: 'btn', style: 'display:none' }, '■ 停止');
+  const refreshSpeak = () => {
+    if (speakState === 'playing') { speakBtn.textContent = '⏸ 暂停'; stopBtn.style.display = ''; }
+    else if (speakState === 'paused') { speakBtn.textContent = '▶ 继续'; stopBtn.style.display = ''; }
+    else { speakBtn.textContent = '▶ 朗读本段'; stopBtn.style.display = 'none'; }
+  };
+  speakBtn.addEventListener('click', () => {
+    if (speakState === 'playing') { tts.pause(); speakState = 'paused'; refreshSpeak(); return; }
+    if (speakState === 'paused') { tts.resume(); speakState = 'playing'; refreshSpeak(); return; }
+    if (!tts.ttsSupported()) { toast('当前浏览器不支持语音朗读'); return; }
+    const text = parser.stripSpeech(p.text);
+    if (!text) { toast('本段没有可朗读的文字'); return; }
+    if (!voice) { toast('没有可用语音，请在设置中检查'); return; }
+    speakState = 'playing';
+    refreshSpeak();
+    card.classList.add('speaking');
+    tts.speak(text, {
+      voice, rate: settings.rate,
+      onend: () => { speakState = 'idle'; card.classList.remove('speaking'); refreshSpeak(); },
+    });
+  });
+  stopBtn.addEventListener('click', () => {
+    tts.stop();
+    speakState = 'idle';
+    card.classList.remove('speaking');
+    refreshSpeak();
+  });
+
+  // 一键回本章节目录（跳转链多次跳转后也不必逐级返回）
+  const tocBtn = el('button', { class: 'btn', onclick: () => nav(`#/read/${p.chapterId}`) }, '☰ 目录');
+
   const card = el('div', { class: 'card para-detail text-para' },
+    el('div', { class: 'row-btns detail-top-bar' }, speakBtn, stopBtn, tocBtn),
     body,
     el('div', { class: 'row-btns detail-btns' },
-      speakBtn,
       el('button', { class: 'btn', onclick: () => showParagraphEditor(p) }, '✎ 编辑'),
       el('button', {
         class: 'btn danger',
@@ -432,26 +465,6 @@ function showParagraphEditor(p) {
       },
       { label: '取消', onclick: (o) => o.remove() },
     ]);
-}
-
-async function toggleSpeak(p, voice, paraNode, speakBtn) {
-  const text = parser.stripSpeech(p.text);
-  if (!text) { toast('本段没有可朗读的文字'); return; }
-  if (!tts.ttsSupported()) { toast('当前浏览器不支持语音朗读'); return; }
-  if (speakBtn.dataset.on === '1') { // 正在朗读 → 停止
-    tts.stop();
-    return;
-  }
-  if (!voice) { toast('没有可用语音，请在设置中检查'); return; }
-  paraNode.classList.add('speaking');
-  speakBtn.dataset.on = '1';
-  speakBtn.textContent = '■ 停止';
-  const done = () => {
-    paraNode.classList.remove('speaking');
-    speakBtn.dataset.on = '';
-    speakBtn.textContent = '▶ 朗读';
-  };
-  tts.speak(text, { voice, rate: settings.rate, onend: done });
 }
 
 // ---------------------------------------------------------------------------

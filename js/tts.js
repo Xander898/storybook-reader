@@ -61,6 +61,18 @@ export function stop() {
   if (cb) cb(); // 主动停止时也要触发结束回调（清除高亮）
 }
 
+/** 暂停：记住当前位置，之后可 resume 继续 */
+export function pause() {
+  if (!ttsSupported()) return;
+  if (speechSynthesis.speaking && !speechSynthesis.paused) speechSynthesis.pause();
+}
+
+/** 继续：从暂停位置恢复朗读 */
+export function resume() {
+  if (!ttsSupported()) return;
+  if (speechSynthesis.paused) speechSynthesis.resume();
+}
+
 export function speaking() {
   return ttsSupported() && speechSynthesis.speaking && !speechSynthesis.paused;
 }
