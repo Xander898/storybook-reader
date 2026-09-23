@@ -1,5 +1,5 @@
 // sw.js — Service Worker：预缓存应用外壳并缓存同源资源（引擎/语言包已内置，无 CDN 依赖）
-const VERSION = 'storybook-v6';
+const VERSION = 'storybook-v7';
 const APP_SHELL = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const APP_SHELL = [
   './js/app.js',
   './js/db.js',
   './js/ocr.js',
+  './js/cloudocr.js',
   './js/parser.js',
   './js/tts.js',
   './js/pdfimport.js',

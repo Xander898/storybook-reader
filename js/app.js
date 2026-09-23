@@ -4,6 +4,7 @@ import * as parser from './parser.js';
 import * as tts from './tts.js';
 import * as ocr from './ocr.js';
 import * as pdfimport from './pdfimport.js';
+import * as cloudocr from './cloudocr.js';
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -69,6 +70,11 @@ const settings = {
   get rate() { return parseFloat(localStorage.getItem('sb-rate') || '1') || 1; },
   set voiceURI(v) { localStorage.setItem('sb-voice', v); },
   set rate(v) { localStorage.setItem('sb-rate', String(v)); },
+  // 识别模式：'cloud'（豆包云端，高准确率）/ 'local'（本地离线）
+  get ocrMode() {
+    return localStorage.getItem('sb-ocr-mode') === 'local' ? 'local' : 'cloud';
+  },
+  set ocrMode(v) { localStorage.setItem('sb-ocr-mode', v); },
 };
 
 async function currentVoice(voices) {
@@ -588,6 +594,13 @@ function drawScanPreview(wrap) {
   if (scan.pageIndexLabel) {
     wrap.append(el('p', { class: 'muted' }, scan.pageIndexLabel));
   }
+  const cloudReady = settings.ocrMode === 'cloud' && cloudocr.getArkKey();
+  const engineTip = cloudReady
+    ? '识别引擎：豆包云端（高准确率）'
+    : settings.ocrMode === 'cloud'
+      ? '尚未配置豆包 API Key，本次将使用本地识别（可在「设置」中配置）'
+      : '识别引擎：本地离线（可在「设置」切换为豆包云端）';
+  wrap.append(el('p', { class: 'muted' }, engineTip));
   wrap.append(el('div', { class: 'preview-box' }, el('img', { class: 'preview-img', src: scan.pageDataUrl, alt: '书页预览' })));
   wrap.append(el('div', { class: 'row-btns' },
     el('button', {
@@ -610,32 +623,37 @@ function drawScanPreview(wrap) {
 
 async function startRecognize() {
   scan.stage = 'recognizing';
-  scan.progressText = '正在加载识别引擎…';
+  scan.progressText = '正在准备识别…';
   scan.progress = 0;
   drawScanView();
   try {
-    const rec = await ocr.recognizeImage(scan.pageDataUrl, (status, progress) => {
-      const map = {
-        'loading tesseract core': '加载识别引擎…',
-        'initializing tesseract': '初始化引擎…',
-        'loading language traineddata': '加载高精度中文模型…',
-        'initializing api': '初始化接口…',
-        'recognizing text': '识别文字中…',
-      };
-      scan.progressText = map[status] || status;
-      scan.progress = progress;
-      const bar = $('#ocr-progress-bar');
-      const label = $('#ocr-progress-text');
-      if (bar) bar.style.width = `${Math.round(progress * 100)}%`;
-      if (label) label.textContent = scan.progressText;
-    });
-    const page = parser.parsePage(rec.lines);
-    scan.pageData = {
-      segments: page.segments.map((s) => ({ ...s })),
-      leadingText: page.leadingText,
-    };
-    scan.stage = 'editing';
-    drawScanView();
+    const useCloud = settings.ocrMode === 'cloud' && cloudocr.getArkKey();
+    if (useCloud) {
+      const text = await cloudocr.cloudRecognize(scan.pageDataUrl, (stage) => {
+        scan.progressText = stage;
+        const label = $('#ocr-progress-text');
+        if (label) label.textContent = stage;
+      });
+      const lines = text.split(/\r?\n/).map((t) => ({ text: t }));
+      applyPageLines(lines);
+    } else {
+      const rec = await ocr.recognizeImage(scan.pageDataUrl, (status, progress) => {
+        const map = {
+          'loading tesseract core': '加载识别引擎…',
+          'initializing tesseract': '初始化引擎…',
+          'loading language traineddata': '加载高精度中文模型…',
+          'initializing api': '初始化接口…',
+          'recognizing text': '识别文字中…',
+        };
+        scan.progressText = map[status] || status;
+        scan.progress = progress;
+        const bar = $('#ocr-progress-bar');
+        const label = $('#ocr-progress-text');
+        if (bar) bar.style.width = `${Math.round(progress * 100)}%`;
+        if (label) label.textContent = scan.progressText;
+      });
+      applyPageLines(rec.lines);
+    }
   } catch (err) {
     console.error(err);
     toast('识别失败：' + (err.message || '请重试'));
@@ -644,11 +662,25 @@ async function startRecognize() {
   }
 }
 
+// 识别结果（行数组）→ 段落切分 → 进入编辑页
+function applyPageLines(lines) {
+  const page = parser.parsePage(lines);
+  scan.pageData = {
+    segments: page.segments.map((s) => ({ ...s })),
+    leadingText: page.leadingText,
+  };
+  scan.stage = 'editing';
+  drawScanView();
+}
+
 function drawScanRecognizing(wrap, text, progress) {
+  const cloud = settings.ocrMode === 'cloud' && cloudocr.getArkKey();
   wrap.append(el('div', { class: 'card recognizing-card' },
     el('p', { id: 'ocr-progress-text' }, text),
     el('div', { class: 'progress-track' }, el('div', { id: 'ocr-progress-bar', class: 'progress-bar', style: `width:${Math.round(progress * 100)}%` })),
-    el('p', { class: 'muted' }, '高精度模型识别较慢，密排书页约需 1~2 分钟，请勿锁屏'),
+    cloud
+      ? el('p', { class: 'muted' }, '豆包云端识别约需 10~30 秒，期间请勿锁屏')
+      : el('p', { class: 'muted' }, '本地高精度模型识别较慢，密排书页约需 1~2 分钟，请勿锁屏'),
   ));
 }
 
@@ -833,15 +865,23 @@ async function fastImportRemaining() {
   view().prepend(progressCard);
 
   try {
+    const useCloud = settings.ocrMode === 'cloud' && cloudocr.getArkKey();
     for (let i = scan.pdf.pageIndex; i <= scan.pdf.numPages; i++) {
       if (scan.cancelFast) break;
       const label = $('#fast-text');
-      if (label) label.textContent = `快速导入：第 ${i} / ${scan.pdf.numPages} 页`;
+      if (label) label.textContent = `快速导入${useCloud ? '（豆包云端）' : ''}：第 ${i} / ${scan.pdf.numPages} 页`;
       try {
         const { dataUrl } = await pdfimport.renderPdfPage(scan.pdf.doc, i);
         scan.pageDataUrl = dataUrl;
-        const rec = await ocr.recognizeImage(dataUrl);
-        const page = parser.parsePage(rec.lines);
+        let lines;
+        if (useCloud) {
+          const text = await cloudocr.cloudRecognize(dataUrl);
+          lines = text.split(/\r?\n/).map((t) => ({ text: t }));
+        } else {
+          const rec = await ocr.recognizeImage(dataUrl);
+          lines = rec.lines;
+        }
+        const page = parser.parsePage(lines);
         scan.pageData = {
           segments: page.segments.map((s) => ({ ...s })),
           leadingText: page.leadingText,
@@ -911,6 +951,68 @@ async function renderSettings() {
     el('div', { class: 'rate-row' }, el('label', {}, '语速'), rateInput, rateLabel),
     testBtn,
     !tts.ttsSupported() ? el('p', { class: 'warn' }, '当前浏览器不支持语音合成') : null,
+  ));
+
+  // ——— 识别（豆包云端 / 本地） ———
+  const keyInput = el('input', {
+    type: 'password', class: 'input',
+    placeholder: '粘贴火山方舟 API Key（形如 ark-… 或 8a5c…）',
+    value: cloudocr.getArkKey(),
+  });
+  const showKeyBtn = el('button', {
+    class: 'btn small',
+    onclick: () => { keyInput.type = keyInput.type === 'password' ? 'text' : 'password'; },
+  }, '👁 显示');
+  const testKeyBtn = el('button', {
+    class: 'btn small',
+    onclick: async () => {
+      const k = keyInput.value.trim();
+      if (!k) { toast('请先填写 API Key'); return; }
+      testKeyBtn.textContent = '测试中…';
+      testKeyBtn.disabled = true;
+      const r = await cloudocr.testArkKey(k);
+      testKeyBtn.textContent = '测试连接';
+      testKeyBtn.disabled = false;
+      if (r.ok) { cloudocr.setArkKey(k); toast('连接成功，豆包云端识别可用'); }
+      else toast(r.error);
+    },
+  }, '测试连接');
+  const saveKeyBtn = el('button', {
+    class: 'btn primary small',
+    onclick: () => {
+      const k = keyInput.value.trim();
+      if (!k) { toast('请先填写 API Key'); return; }
+      cloudocr.setArkKey(k);
+      toast('已保存，识别将使用豆包云端');
+      modeSel.value = 'cloud';
+      settings.ocrMode = 'cloud';
+    },
+  }, '保存 Key');
+
+  const modeSel = el('select', { class: 'input' });
+  modeSel.append(
+    el('option', { value: 'cloud' }, '豆包云端（推荐，准确率接近人工）'),
+    el('option', { value: 'local' }, '本地离线（免费，准确率较低）'),
+  );
+  modeSel.value = settings.ocrMode;
+  modeSel.addEventListener('change', () => {
+    if (modeSel.value === 'cloud' && !cloudocr.getArkKey()) {
+      toast('云端模式需要先填写并保存 API Key');
+      modeSel.value = 'local';
+      return;
+    }
+    settings.ocrMode = modeSel.value;
+    toast(modeSel.value === 'cloud' ? '已切换到豆包云端识别' : '已切换到本地识别');
+  });
+
+  v.append(el('div', { class: 'card settings-card' },
+    el('h3', {}, '识别'),
+    el('label', {}, '识别引擎'),
+    modeSel,
+    el('label', {}, '豆包 API Key（火山方舟）'),
+    el('div', { class: 'row-btns' }, keyInput, showKeyBtn),
+    el('div', { class: 'row-btns' }, testKeyBtn, saveKeyBtn),
+    el('p', { class: 'muted' }, '云端识别按量计费约 1~2 分/页；Key 只保存在本机。获取方式：火山引擎官网 → 搜「火山方舟」→ API Key 管理'),
   ));
 
   const exportBtn = el('button', {
