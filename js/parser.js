@@ -1,7 +1,24 @@
 // parser.js — 段号切分 / 跨页合并 / 跳转链接解析（纯函数，Node 可测）
 
 // OCR 常见误识别容错：仅用于段号与跳转链接里的数字位
-const DIGIT_FIX = { 'O': '0', 'o': '0', 'l': '1', 'I': '1', 'D': '0', 'Q': '0' };
+// 覆盖：全角数字，以及密排小字下数字被误读为形近拉丁字母的情况
+// （8→B、6→G/b、2→Z、5→S、9→g/q/p、4→A、7→T、0→O/D/Q/U、1→l/I）
+const DIGIT_FIX = {
+  'O': '0', 'o': '0', 'D': '0', 'Q': '0', 'U': '0',
+  'l': '1', 'I': '1',
+  'Z': '2', 'z': '2',
+  'A': '4',
+  'S': '5', 's': '5',
+  'G': '6', 'b': '6',
+  'T': '7',
+  'B': '8',
+  'g': '9', 'q': '9', 'p': '9', 'P': '9',
+  '０': '0', '１': '1', '２': '2', '３': '3', '４': '4',
+  '５': '5', '６': '6', '７': '7', '８': '8', '９': '9',
+};
+
+// 段号/跳转数字位的容错字符集（正则字符类内容）
+const NUMSET = '0-9０-９OoIlDQUZzASsGgBbTtPpq';
 
 export function fixDigits(s) {
   let out = '';
@@ -9,14 +26,15 @@ export function fixDigits(s) {
   return out;
 }
 
-// 行首段号候选：四位"数字"（含容错字符），且其后不能再紧跟数字字符（避免吞掉 5 位以上数字）
-const NUMBER_CANDIDATE_RE = /^[ \t　]*([0-9OolIDQ]{4})(?![0-9OolIDQ])/;
+// 行首段号候选：四位"数字"（含容错字符），其后不能紧跟数字或拉丁字母
+// （拉丁字母防御：避免把 "Apple" 吞成段号 4991；真实段号后是空格/汉字/标点）
+const NUMBER_CANDIDATE_RE = new RegExp(`^[ \\t　]*([${NUMSET}]{4})(?![${NUMSET}A-Za-z])`);
 
 // 特殊段号（部分剧情书在 0001 之前有开场/骰运/结局段）：
 //   α 章节开场段、Ω 结局段、骰运范围段——仅固定这五个：1-2、3-4、5-6、7-8、9-10
 //   其余任何 N-M 都不是段号（如"10-11""2-3"），避免把正文里的范围表述误切段。
 const RANGE_WHITELIST = new Set(['1-2', '3-4', '5-6', '7-8', '9-10']);
-const RANGE_CANDIDATE_RE = /^[ \t　]*([0-9OolIDQ]{1,3})[ \t　]*[-—–－一~～][ \t　]*([0-9OolIDQ]{1,3})(?![0-9OolIDQ])/;
+const RANGE_CANDIDATE_RE = new RegExp(`^[ \\t　]*([${NUMSET}]{1,3})[ \\t　]*[-—–－一~～][ \\t　]*([${NUMSET}]{1,3})(?![${NUMSET}A-Za-z])`);
 // α/Ω 及 OCR 常见误读（a/A/ɑ、w/W/ω）；其后不能再跟拉丁字母（避免吞掉普通单词）
 const GREEK_CANDIDATE_RE = /^[ \t　]*([aAɑαwWωΩ])(?![A-Za-z])/;
 
@@ -28,12 +46,12 @@ export function normalizeNumber(s) {
   const t = (s ?? '').trim().replace(/[\s"'“”‘’（()]/g, '');
   if (/^[aAɑα]$/.test(t)) return 'α';
   if (/^[wWωΩ]$/.test(t)) return 'Ω';
-  const r = /^([0-9OolIDQ]{1,3})[-—–－一~～]([0-9OolIDQ]{1,3})$/.exec(t);
+  const r = new RegExp(`^([${NUMSET}]{1,3})[-—–－一~～]([${NUMSET}]{1,3})$`).exec(t);
   if (r) {
     const key = `${fixDigits(r[1])}-${fixDigits(r[2])}`;
     if (RANGE_WHITELIST.has(key)) return key;
   }
-  const d = /^([0-9OolIDQ]{4})$/.exec(t);
+  const d = new RegExp(`^([${NUMSET}]{4})$`).exec(t);
   if (d) { const n = fixDigits(d[1]); if (/^\d{4}$/.test(n)) return n; }
   return null;
 }
@@ -101,6 +119,10 @@ function restAfter(rawText, offset) {
   return rawText.slice(offset).replace(/^[ \t　.,、:："'’”()（）\[\]【】•·-]+/, '');
 }
 
+// 上一行断在跳转关键词上：本行行首的数字是被换行拆开的跳转目标，而非段号
+// （三栏密排下，"查看"与目标数字可能分处两行）
+const JUMP_TAIL_RE = /(?:查看|查[眼雨着柱罚界相冈]|段落|段[藕蒂葛葬络洛]|转到|转至|翻到|翻至|回到|返回)[ \t　"'“”‘’（(、。]*$/;
+
 /**
  * 解析整页 OCR 行，按段号切分。
  * lines: [{ text, y0, y1 }]（y 为页面纵向坐标，可省略）
@@ -109,15 +131,17 @@ function restAfter(rawText, offset) {
  *   - leadingText: 第一个段号出现之前的无段号文本（用于跨页合并）
  * 段内保留原文结构：识别到的每一行以换行符保留，行与行之间的空行
  * （即原文的段落/对话分隔）保留为一个空行。
- * 段号递增校验只作用于四位数字段号：新候选必须满足 prev < n <= prev + 10，
- * 否则视为正文（如“1997年……”）。特殊段号（α/Ω/N-M）不参与该链，
- * 总是独立成段，且不影响数字链（α 段之后的 0001 仍能正常开段）。
+ * 切段规则（顺序无关）：行首四位数字一律开新段，不做递增校验——
+ * 三栏交错的阅读顺序、跨页/章节大跳号（如 1388）都会使真实段号
+ * 不满足"prev+10"窗口，从而被误并入正文。误报只靠两条精确规则排除：
+ *   ① 年份模式：19XX/20XX 且其后紧跟"年"（如"1997年的记录"）→ 正文；
+ *   ② 跳转续接：上一段最后一行断在"查看/转到"等跳转关键词上 →
+ *      本行行首数字是被换行拆开的跳转目标，并入上一段。
  */
 export function parsePage(lines) {
   const segments = [];
   let leadingText = '';
   let current = null; // { number, parts: [], breakPending, y0, y1 }
-  let lastNumeric = null; // 最近一次接受的四位数字段号（特殊段号不计入）
 
   for (const line of lines) {
     const raw = normalizeOcrText((line.text ?? '').trim());
@@ -129,25 +153,24 @@ export function parsePage(lines) {
 
     const parsed = parseLineNumber(raw);
 
+    // 跳转续接判定（正文并入条件②）
+    const tail = current ? (current.parts.filter((p) => p !== '').slice(-1)[0] || '') : '';
+    const jumpCarry = current ? JUMP_TAIL_RE.test(tail) : false;
+
     let startsNew = false;
-    if (parsed) {
+    if (parsed && !jumpCarry) {
       if (parsed.special) {
-        // α/Ω/N-M 特殊段号：总是新起一段
+        // α/Ω/白名单范围段：总是新起一段
         startsNew = true;
       } else {
-        const n = Number(parsed.number);
-        if (lastNumeric === null) {
-          // 首个数字段号：直接接受（若首行恰是年份等，可在编辑界面修正）
-          startsNew = true;
-        } else if (n > lastNumeric && n <= lastNumeric + 10) {
-          startsNew = true;
-        }
+        // 年份误报判定（正文并入条件①）
+        const isYear = /^(19|20)/.test(parsed.number) && /^年/.test(parsed.rest.replace(/^[ \t　]/, ''));
+        startsNew = !isYear;
       }
     }
 
     if (startsNew) {
       if (current) segments.push(finishSegment(current));
-      if (!parsed.special) lastNumeric = Number(parsed.number);
       current = { number: parsed.number, parts: [parsed.rest], breakPending: false, y0: line.y0, y1: line.y1 };
     } else if (current) {
       if (current.breakPending) current.parts.push(''); // 空行 → 段内段落分隔
@@ -191,9 +214,9 @@ export function joinText(a, b) {
 //   "调查1997"“查询0123" 这类正文误判为跳转。
 // ---------------------------------------------------------------------------
 
-const NUMSET = '0-9OolIDQ';
 // 跳转只指向四位数字段号——α/Ω/1-2 等特殊段不会被任何跳转引用
 // 关键词（含单字误读容错）与段号之间允许出现 OCR 残留空白与引号；数字后可再跟"段落"二字
+// （NUMSET 含数字误读容错字符，见文件顶部）
 const JUMP_RE = new RegExp(
   `(?:查看|查[眼雨着柱罚界相冈]|段落|段[藕蒂葛葬络洛]|转到|转至|翻到|翻至|回到|返回)` +
   `[\\s"'“”‘’（(]*([${NUMSET}]{4})(?![${NUMSET}])` +

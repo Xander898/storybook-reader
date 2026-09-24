@@ -65,15 +65,68 @@ test('parsePage 页首孤行进入 leadingText（跨页续文/页眉）', () => 
   assert.equal(segments[0].number, '0005');
 });
 
-test('parsePage 段号递增校验拒绝误判（1997 视为正文）', () => {
+test('parsePage 年份不切段（1997年 视为正文）', () => {
   const lines = [
     { text: '0003 你翻开日记。', y0: 10, y1: 30 },
     { text: '1997年的记录映入眼帘。', y0: 40, y1: 60 },
-    { text: '0004 你合上日记。', y0: 70, y1: 90 },
+    { text: '2011年也过去了。', y0: 50, y1: 70 },
+    { text: '0004 你合上日记。', y0: 80, y1: 100 },
   ];
   const { segments } = parsePage(lines);
   assert.equal(segments.length, 2);
   assert.ok(segments[0].text.includes('1997年'));
+  assert.ok(segments[0].text.includes('2011年'));
+});
+
+test('parsePage 段号顺序无关：跳号/三栏交错都能切段（1388 等）', () => {
+  const lines = [
+    { text: '1380 你站在入口。' },
+    { text: '1385 跳号五段也能切。' },
+    { text: '1388 你推开石门。' },
+    { text: '1400 大跳号切段。' },
+    { text: '1000 回跳（章节开头）切段。' },
+  ];
+  const { segments } = parsePage(lines);
+  assert.deepEqual(segments.map((s) => s.number), ['1380', '1385', '1388', '1400', '1000']);
+});
+
+test('parsePage 三栏交错行序不误并段', () => {
+  const lines = [
+    { text: '1380 栏一开头。' },
+    { text: '1390 栏二开头。' },
+    { text: '1400 栏三开头。' },
+    { text: '1381 栏一第二段。' },
+    { text: '1391 栏二第二段。' },
+    { text: '1401 栏三第二段。' },
+  ];
+  const { segments } = parsePage(lines);
+  assert.equal(segments.length, 6);
+  assert.deepEqual(segments.map((s) => s.number), ['1380', '1390', '1400', '1381', '1391', '1401']);
+});
+
+test('parsePage 跳转数字被换行拆开时并入上一段（不切成新段）', () => {
+  const lines = [
+    { text: '0001 前方有两条路，你决定查看' },
+    { text: '1388。石门开启。' },
+    { text: '1389 下一段。' },
+  ];
+  const { segments } = parsePage(lines);
+  assert.equal(segments.length, 2);
+  assert.equal(segments[0].number, '0001');
+  assert.ok(segments[0].text.includes('查看'));
+  assert.ok(segments[0].text.includes('1388。石门开启。'));
+  assert.equal(segments[1].number, '1389');
+});
+
+test('parsePage 年份位于页首（无段号前文）也不切段', () => {
+  const lines = [
+    { text: '1997年的故事开始了。' },
+    { text: '0001 你推开门。' },
+  ];
+  const { segments, leadingText } = parsePage(lines);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].number, '0001');
+  assert.equal(leadingText, '1997年的故事开始了。');
 });
 
 test('parsePage 容错段号 O→0 / l→1', () => {
