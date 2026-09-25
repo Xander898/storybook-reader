@@ -307,3 +307,30 @@ test('stripSpeech 剔除跳转提示', () => {
   assert.equal(stripSpeech('备注“段落0003”。（不要现在查看！）'), '备注“”。（不要现在查看！）');
   assert.equal(stripSpeech('普通正文。'), '普通正文。');
 });
+
+test('tokenizeText 解析图标标记为 icon token', () => {
+  const toks = tokenizeText('你获得〔图标：骰子〕三点生命。');
+  const types = toks.map((t) => t.type);
+  assert.deepEqual(types, ['text', 'icon', 'text']);
+  assert.equal(toks[1].name, '骰子');
+  assert.equal(toks[1].value, '〔图标：骰子〕');
+});
+
+test('tokenizeText 图标标记与跳转互不混淆', () => {
+  const toks = tokenizeText('获得〔图标：金币〕后查看0007。');
+  assert.equal(toks.find((t) => t.type === 'icon')?.name, '金币');
+  assert.equal(toks.find((t) => t.type === 'jump')?.target, '0007');
+  // 图标名称里即使含「查看」字样，也不应产生跳转
+  const toks2 = tokenizeText('〔图标：查看〕');
+  assert.equal(toks2.length, 1);
+  assert.equal(toks2[0].type, 'icon');
+});
+
+test('stripSpeech 图标读中文名', () => {
+  assert.equal(stripSpeech('你获得〔图标：骰子〕三点生命。'), '你获得骰子三点生命。');
+  assert.equal(stripSpeech('失去1点〔图标:生命〕。'), '失去1点生命。');
+});
+
+test('normalizeOcrText 保留图标标记（不被噪声剔除）', () => {
+  assert.equal(normalizeOcrText('获得〔图标：骰子〕后继续。'), '获得〔图标：骰子〕后继续。');
+});

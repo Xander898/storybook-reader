@@ -224,19 +224,38 @@ const JUMP_RE = new RegExp(
   'g'
 );
 
+// 图标占位标记：云识别把正文行内的图标转成 `〔图标：名称〕`，
+// 渲染时命中图标库则显示库图，朗读时读出「名称」。冒号兼容半角/全角。
+const ICON_MARKER_RE = /〔图标[:：]([^〕]+)〕/g;
+
 /**
  * 将段落正文切分为渲染 token：
- * [{ type:'text', value } | { type:'jump', value, target }]
- * target 为规范化段号（四位数字）。
+ * [{ type:'text', value } | { type:'jump', value, target } | { type:'icon', value, name }]
+ * target 为规范化段号（四位数字）；name 为图标中文名（库名或描述）。
  */
 export function tokenizeText(text) {
-  const tokens = [];
+  // 收集跳转与图标两类匹配，按出现位置排序后切分（二者互不重叠）
+  const matches = [];
   JUMP_RE.lastIndex = 0;
-  let m, last = 0;
+  let m;
   while ((m = JUMP_RE.exec(text)) !== null) {
-    if (m.index > last) tokens.push({ type: 'text', value: text.slice(last, m.index) });
-    tokens.push({ type: 'jump', value: m[0], target: normalizeNumber(m[1]) ?? fixDigits(m[1]) });
-    last = m.index + m[0].length;
+    matches.push({ type: 'jump', index: m.index, end: m.index + m[0].length, value: m[0], target: normalizeNumber(m[1]) ?? fixDigits(m[1]) });
+  }
+  ICON_MARKER_RE.lastIndex = 0;
+  while ((m = ICON_MARKER_RE.exec(text)) !== null) {
+    matches.push({ type: 'icon', index: m.index, end: m.index + m[0].length, value: m[0], name: m[1].trim() });
+  }
+  matches.sort((a, b) => a.index - b.index);
+
+  const tokens = [];
+  let last = 0;
+  for (const mk of matches) {
+    if (mk.index < last) continue; // 防御性：重叠匹配跳过
+    if (mk.index > last) tokens.push({ type: 'text', value: text.slice(last, mk.index) });
+    tokens.push(mk.type === 'jump'
+      ? { type: 'jump', value: mk.value, target: mk.target }
+      : { type: 'icon', value: mk.value, name: mk.name });
+    last = mk.end;
   }
   if (last < text.length) tokens.push({ type: 'text', value: text.slice(last) });
   return tokens;
@@ -247,7 +266,8 @@ export function tokenizeText(text) {
  * 剔除后残留的重复/行首句读一并清理。
  */
 export function stripSpeech(text) {
-  return text.replace(JUMP_RE, '')
+  return text.replace(ICON_MARKER_RE, (m, name) => name) // 图标读中文名
+    .replace(JUMP_RE, '')
     .replace(/[。，、；]{2,}/g, '。')
     .replace(/^[。，、；]+/, '')
     .replace(/\s{2,}/g, ' ')

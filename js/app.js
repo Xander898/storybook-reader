@@ -378,6 +378,10 @@ async function renderParagraphDetail(paraId) {
   const v = view();
   v.innerHTML = '';
 
+  // 图标库：名称 → 图标记录，供图标标记内联渲染（命中显示库图，未命中显示名称占位）
+  const iconByName = new Map((await db.listIcons()).map((ic) => [ic.name, ic]));
+  const iconUrlCache = new Map();
+
   const body = el('p', { class: 'para-detail-body' });
   for (const token of parser.tokenizeText(p.text)) {
     if (token.type === 'jump') {
@@ -389,6 +393,15 @@ async function renderParagraphDetail(paraId) {
           else toast(`未找到段落 ${token.target}`);
         },
       }, token.value));
+    } else if (token.type === 'icon') {
+      const ic = iconByName.get(token.name);
+      if (ic) {
+        let url = iconUrlCache.get(token.name);
+        if (!url) { url = URL.createObjectURL(ic.blob); iconUrlCache.set(token.name, url); }
+        body.append(el('img', { class: 'inline-icon', src: url, alt: token.name, title: token.name }));
+      } else {
+        body.append(el('span', { class: 'inline-icon-fallback' }, token.name));
+      }
     } else {
       body.append(token.value);
     }
@@ -1118,6 +1131,69 @@ async function renderSettings() {
     el('div', { class: 'row-btns' }, keyInput, showKeyBtn),
     el('div', { class: 'row-btns' }, testKeyBtn, saveKeyBtn),
     el('p', { class: 'muted' }, '云端识别按量计费约 1~2 分/页；Key 只保存在本机。获取方式：火山引擎官网 → 搜「火山方舟」→ API Key 管理'),
+  ));
+
+  // ——— 图标库 ———
+  const iconFileInput = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
+  const iconNameInput = el('input', { class: 'input', placeholder: '图标中文名，如 骰子', maxlength: '20' });
+  const iconListWrap = el('div', { class: 'icon-lib-list' });
+
+  async function refreshIconLib() {
+    const icons = await db.listIcons();
+    iconListWrap.innerHTML = '';
+    if (!icons.length) {
+      iconListWrap.append(el('p', { class: 'muted' }, '还没有图标。添加后识别书页时会自动匹配这些图标。'));
+      return;
+    }
+    for (const ic of icons) {
+      const url = URL.createObjectURL(ic.blob);
+      const cell = el('div', { class: 'icon-lib-item' },
+        el('img', { class: 'icon-lib-thumb', src: url, alt: ic.name }),
+        el('span', { class: 'icon-lib-name' }, ic.name),
+        el('button', {
+          class: 'icon-btn danger', 'aria-label': '删除',
+          onclick: async (e) => {
+            e.stopPropagation();
+            if (await confirmDialog('删除图标', `确定删除图标「${ic.name}」吗？`)) {
+              await db.deleteIcon(ic.id);
+              refreshIconLib();
+            }
+          },
+        }, '✕'),
+      );
+      iconListWrap.append(cell);
+    }
+  }
+  refreshIconLib();
+
+  iconFileInput.addEventListener('change', async () => {
+    const f = iconFileInput.files?.[0];
+    iconFileInput.value = '';
+    if (!f) return;
+    const name = iconNameInput.value.trim();
+    if (!name) { toast('请先在上方填写图标中文名'); return; }
+    try {
+      await db.addIcon(name, f, f.type || 'image/png');
+      iconNameInput.value = '';
+      toast(`已添加图标「${name}」`);
+      refreshIconLib();
+    } catch (err) { toast('添加失败：' + err.message); }
+  });
+
+  const iconAddBtn = el('button', {
+    class: 'btn primary',
+    onclick: () => {
+      iconNameInput.value = iconNameInput.value.trim();
+      iconFileInput.click();
+    },
+  }, '＋ 添加图标');
+
+  v.append(el('div', { class: 'card settings-card' },
+    el('h3', {}, '图标库'),
+    el('p', { class: 'muted' }, '上传常用图标（图片＋中文名）。识别书页时，命中库中图标会内联显示图片，朗读时读出中文名。'),
+    el('div', { class: 'row-btns' }, iconNameInput, iconAddBtn),
+    iconFileInput,
+    iconListWrap,
   ));
 
   const exportBtn = el('button', {

@@ -1,6 +1,6 @@
 // db.js — IndexedDB 封装：书架 / 章节 / 段落，导出导入
 const DB_NAME = 'storybook-reader';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise = null;
 
@@ -21,6 +21,9 @@ export function openDB() {
         const s = db.createObjectStore('paragraphs', { keyPath: 'id', autoIncrement: true });
         s.createIndex('chapterId', 'chapterId');
         s.createIndex('chapterId_number', ['chapterId', 'number']);
+      }
+      if (!db.objectStoreNames.contains('icons')) {
+        db.createObjectStore('icons', { keyPath: 'id', autoIncrement: true });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -187,6 +190,23 @@ export function updateParagraph(id, patch) {
 
 export function deleteParagraph(id) {
   return tx('paragraphs', 'readwrite', (s) => wrap(s.delete(id)));
+}
+
+// ---------------- 图标库 ----------------
+export function addIcon(name, blob, mime) {
+  return tx('icons', 'readwrite', (s) => {
+    const r = s.add({ name, blob, mime: mime || 'image/png', createdAt: Date.now() });
+    return new Promise((res) => { r.onsuccess = () => res(r.result); });
+  });
+}
+
+export function listIcons() {
+  return tx('icons', 'readonly', (s) => wrap(s.getAll()))
+    .then((list) => list.sort((a, b) => a.createdAt - b.createdAt));
+}
+
+export function deleteIcon(id) {
+  return tx('icons', 'readwrite', (s) => wrap(s.delete(id)));
 }
 
 export function getPendingParagraph(chapterId) {
