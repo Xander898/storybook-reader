@@ -205,6 +205,23 @@ export function listIcons() {
     .then((list) => list.sort((a, b) => a.createdAt - b.createdAt));
 }
 
+export function updateIcon(id, name) {
+  return tx('icons', 'readwrite', (s) => {
+    const getReq = s.get(id);
+    return new Promise((resolve, reject) => {
+      getReq.onsuccess = () => {
+        const ic = getReq.result;
+        if (!ic) { reject(new Error('图标不存在')); return; }
+        ic.name = name;
+        const putReq = s.put(ic);
+        putReq.onsuccess = () => resolve();
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  });
+}
+
 export function deleteIcon(id) {
   return tx('icons', 'readwrite', (s) => wrap(s.delete(id)));
 }
