@@ -205,21 +205,20 @@ export function listIcons() {
     .then((list) => list.sort((a, b) => a.createdAt - b.createdAt));
 }
 
-export function updateIcon(id, name) {
-  return tx('icons', 'readwrite', (s) => {
-    const getReq = s.get(id);
-    return new Promise((resolve, reject) => {
-      getReq.onsuccess = () => {
-        const ic = getReq.result;
-        if (!ic) { reject(new Error('图标不存在')); return; }
-        ic.name = name;
-        const putReq = s.put(ic);
-        putReq.onsuccess = () => resolve();
-        putReq.onerror = () => reject(putReq.error);
-      };
-      getReq.onerror = () => reject(getReq.error);
-    });
-  });
+export function updateIcon(id, patch) {
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const t = db.transaction('icons', 'readwrite');
+    const s = t.objectStore('icons');
+    const req = s.get(id);
+    req.onsuccess = () => {
+      const rec = req.result;
+      if (!rec) { reject(new Error('图标不存在')); return; }
+      Object.assign(rec, patch);
+      s.put(rec);
+    };
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+  }));
 }
 
 export function deleteIcon(id) {
@@ -311,6 +310,53 @@ export async function importData(data) {
     if (p._imageDataUrl) {
       const blob = await dataUrlToBlob(p._imageDataUrl);
       await updateParagraph(p.id, { image: blob, _imageDataUrl: undefined });
+    }
+  }
+}
+
+// ---------------- 图标库单独导出 / 导入 ----------------
+export async function exportIcons() {
+  const icons = await tx('icons', 'readonly', (s) => wrap(s.getAll()));
+  const out = [];
+  for (const ic of icons) {
+    const copy = { id: ic.id, name: ic.name, mime: ic.mime, createdAt: ic.createdAt };
+    if (ic.blob instanceof Blob) copy.blob = await blobToDataUrl(ic.blob);
+    out.push(copy);
+  }
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    icons: out,
+  };
+}
+
+export async function importIcons(data) {
+  if (!data || data.version !== 1 || !Array.isArray(data.icons)) {
+    throw new Error('图标库文件格式不正确');
+  }
+  const db = await openDB();
+  await new Promise((resolve, reject) => {
+    const t = db.transaction('icons', 'readwrite');
+    t.objectStore('icons').clear();
+    for (const ic of data.icons) {
+      const copy = {
+        name: ic.name,
+        blob: null,
+        mime: ic.mime || 'image/png',
+        createdAt: ic.createdAt || Date.now(),
+      };
+      if (typeof ic.blob === 'string' && ic.blob.startsWith('data:')) copy._iconDataUrl = ic.blob;
+      t.objectStore('icons').put(copy);
+    }
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+  });
+  // 第二步：把 dataUrl 图片转回 Blob 逐条更新
+  const icons = await tx('icons', 'readonly', (s) => wrap(s.getAll()));
+  for (const ic of icons) {
+    if (ic._iconDataUrl) {
+      const blob = await dataUrlToBlob(ic._iconDataUrl);
+      await updateIcon(ic.id, { blob, _iconDataUrl: null });
     }
   }
 }

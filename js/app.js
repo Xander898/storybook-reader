@@ -1227,7 +1227,7 @@ async function renderIcons() {
           const name = input.value.trim();
           if (!name) { toast('名称不能为空'); return; }
           try {
-            await db.updateIcon(ic.id, name);
+            await db.updateIcon(ic.id, { name });
           } catch (err) { toast('重命名失败：' + err.message); o.remove(); return; }
           o.remove();
           toast('已重命名');
@@ -1270,6 +1270,41 @@ async function renderIcons() {
     },
   }, '＋ 添加');
 
+  // ——— 图标库备份：单独导出 / 导入 ———
+  const exportBtn = el('button', {
+    class: 'btn',
+    onclick: async () => {
+      try {
+        const data = await db.exportIcons();
+        const json = JSON.stringify(data);
+        const a = el('a', {
+          href: URL.createObjectURL(new Blob([json], { type: 'application/json' })),
+          download: `图标库备份-${new Date().toISOString().slice(0, 10)}.json`,
+        });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        toast('已导出图标库');
+      } catch (err) { toast('导出失败：' + err.message); }
+    },
+  }, '⬇ 导出图标库');
+
+  const importInput = el('input', { type: 'file', accept: '.json,application/json', style: 'display:none' });
+  importInput.addEventListener('change', async () => {
+    const f = importInput.files?.[0];
+    importInput.value = '';
+    if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      if (!(await confirmDialog('导入图标库', '导入将覆盖当前图标库（不影响书籍数据），确定继续吗？'))) return;
+      await db.importIcons(data);
+      toast('图标库导入完成');
+      refresh();
+    } catch (err) { toast('导入失败：' + err.message); }
+  });
+  const importBtn = el('button', { class: 'btn', onclick: () => importInput.click() }, '⬆ 导入图标库');
+
   v.append(
     el('div', { class: 'card settings-card' },
       el('p', { class: 'muted' }, '上传常用图标（图片＋中文名）。识别书页时，命中库中图标会内联显示图片，朗读时读出中文名。'),
@@ -1277,6 +1312,12 @@ async function renderIcons() {
       iconFileInput,
     ),
     iconGrid,
+    el('div', { class: 'card settings-card' },
+      el('h3', {}, '备份'),
+      el('p', { class: 'muted' }, '图标库可单独导出为 JSON 备份，也可在换设备时导入恢复，不影响书籍数据。'),
+      el('div', { class: 'row-btns' }, exportBtn, importBtn),
+      importInput,
+    ),
   );
   refresh();
 }
