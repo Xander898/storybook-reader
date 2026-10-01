@@ -102,7 +102,15 @@ async function route() {
   tts.stop();
   for (const r of routes) {
     const m = r.re.exec(hash);
-    if (m) { await r.fn(m); return; }
+    if (m) {
+      try { await r.fn(m); }
+      catch (err) {
+        // 视图渲染抛错时给出可见提示，避免页面停留在上一屏造成“点了没反应”
+        console.error(err);
+        toast('页面加载出错：' + (err && err.message ? err.message : err));
+      }
+      return;
+    }
   }
   location.hash = '#/';
 }
@@ -328,10 +336,17 @@ async function renderBook(bookId) {
 // ---------------------------------------------------------------------------
 // 章节段落目录（一级导航）：全部段落列表，点击进入段落详情
 // ---------------------------------------------------------------------------
+// 章节内文本段落（自动排序）：α → 10 以内数字/范围段 → Ω → 四位数字段号 → 自定义段名 → 无段号。
+// 只影响显示顺序，不改动数据；目录页与段落详情的上一段/下一段都用这一份顺序。
+async function listSortedTextParas(chapterId) {
+  const list = (await db.listParagraphs(chapterId)).filter((p) => p.type === 'text');
+  return list.sort((a, b) => parser.compareParagraphNumbers(a.number, b.number));
+}
+
 async function renderRead(chapterId) {
   const chapter = await db.getChapter(chapterId);
   if (!chapter) { nav('#/'); return; }
-  const paras = (await db.listParagraphs(chapterId)).filter((p) => p.type === 'text');
+  const paras = await listSortedTextParas(chapterId);
 
   // 顶部右侧：返回章节目录（左上角返回键保持原样，仍是历史回退）
   setHeader(chapter.title, true, el('button', {
@@ -479,7 +494,7 @@ function showImportTextModal(chapterId) {
   });
   showModal('导入文本',
     el('div', { class: 'import-form' },
-      el('p', { class: 'muted' }, '自动按段号切分；行首写【段名】可强制开段并自定义段名。可多次导入，自动续接。'),
+      el('p', { class: 'muted' }, '自动按段号切分；行首写【段名】可强制开段并自定义段名。每次导入的段落独立入库，不与已有段落拼接。'),
       textarea,
     ),
     [
@@ -491,7 +506,7 @@ function showImportTextModal(chapterId) {
           try {
             const r = await importChapterText(chapterId, text);
             o.remove();
-            toast(r.merged ? '已拼接到未闭合段落' : `已导入 ${r.count} 个段落`);
+            toast(`已导入 ${r.count} 个段落`);
             route();
           } catch (err) {
             toast('导入失败：' + err.message);
