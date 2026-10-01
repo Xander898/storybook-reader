@@ -1346,7 +1346,20 @@ async function renderIcons() {
 // ---------------------------------------------------------------------------
 async function init() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => { /* 离线缓存失败不影响使用 */ });
+    // 新 SW 接管（skipWaiting+claim）后自动重载一次，保证拿到最新代码——
+    // 用户只需刷新一次，不必再手动"刷新两次"
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    });
+    navigator.serviceWorker.register('sw.js')
+      .then((reg) => {
+        // 每小时主动检查一次更新（导航时浏览器本身也会检查）
+        setInterval(() => { try { reg.update?.(); } catch { /* 忽略 */ } }, 60 * 60 * 1000);
+      })
+      .catch(() => { /* 离线缓存失败不影响使用 */ });
   }
   if (!('indexedDB' in window)) {
     setHeader('无法使用');
