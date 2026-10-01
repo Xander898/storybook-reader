@@ -475,11 +475,11 @@ async function renderParagraphDetail(paraId) {
 function showImportTextModal(chapterId) {
   const textarea = el('textarea', {
     class: 'input', rows: '12',
-    placeholder: '粘贴豆包等 App 识别出的书页文本…\n行首四位数字会识别为段号；换行和空行会保留',
+    placeholder: '粘贴豆包等 App 识别出的书页文本…\n行首四位数字会识别为段号；换行和空行会保留\n需要自定义段名时，用【段名】开头的行，如：【Boss战】战斗开始…',
   });
   showModal('导入文本',
     el('div', { class: 'import-form' },
-      el('p', { class: 'muted' }, '外部识别的准确率通常更高，粘贴后自动按段号切分为段落。可以多次导入，自动续接。'),
+      el('p', { class: 'muted' }, '自动按段号切分；行首写【段名】可强制开段并自定义段名。可多次导入，自动续接。'),
       textarea,
     ),
     [
@@ -503,11 +503,28 @@ function showImportTextModal(chapterId) {
 }
 
 async function importChapterText(chapterId, text) {
-  const lines = text.split(/\r?\n/).map((t) => ({ text: t }));
-  const page = parser.parsePage(lines);
+  // 【段名】开头的行强制开段，段名可自定义（自动识别规则不变，仅文本导入支持此标记）
+  // 切块：首个未命名块仍走 parsePage 自动识别；每个命名块独立成一段
+  const CUSTOM_SEG_RE = /^\s*【([^】]{1,24})】\s*(.*)$/;
+  const chunks = [];
+  let cur = { name: null, lines: [] };
+  for (const line of text.split(/\r?\n/)) {
+    const m = CUSTOM_SEG_RE.exec(line);
+    if (m) {
+      chunks.push(cur);
+      cur = { name: m[1].trim(), lines: m[2] ? [m[2]] : [] };
+    } else cur.lines.push(line);
+  }
+  chunks.push(cur);
+
+  const page = parser.parsePage(chunks[0].lines.map((t) => ({ text: t })));
   const segs = page.segments.map((s) => ({ ...s }));
   let leading = page.leadingText;
   let merged = false;
+
+  for (let i = 1; i < chunks.length; i++) {
+    segs.push({ number: chunks[i].name, text: chunks[i].lines.join('\n').trim() });
+  }
 
   // 跨页续接逻辑与扫描入库一致
   const pendingP = await db.getPendingParagraph(chapterId);
@@ -534,9 +551,9 @@ async function importChapterText(chapterId, text) {
 }
 
 function showParagraphEditor(p) {
-  const textarea = el('textarea', { class: 'input', rows: '6' });
+  const textarea = el('textarea', { class: 'input edit-textarea', rows: '16' });
   textarea.value = p.text;
-  const numInput = el('input', { class: 'input num-input', maxlength: '4', placeholder: '段号' });
+  const numInput = el('input', { class: 'input num-input', maxlength: '24', placeholder: '段号 / 自定义段名' });
   numInput.value = p.number || '';
   showModal('编辑段落',
     el('div', { class: 'edit-form' },
@@ -560,10 +577,10 @@ function showParagraphEditor(p) {
         label: '保存', class: 'primary',
         onclick: async (o) => {
           const number = numInput.value.trim();
-          if (number && !/^\d{4}$/.test(parser.fixDigits(number))) { toast('段号应为四位数字'); return; }
+          // 识别规则内（四位数字/N-M/α/Ω）归一化；其余视为自定义段名，原样保留
           await db.updateParagraph(p.id, {
             text: textarea.value,
-            number: number ? parser.fixDigits(number) : null,
+            number: number ? (parser.normalizeNumber(number) ?? number) : null,
           });
           o.remove();
           route();
@@ -830,13 +847,15 @@ function drawScanEditing(wrap) {
     editArea.append(el('div', { class: 'empty-hint' }, '本页没有识别到段号。若整页都是上一段的续文，直接保存即可。'));
   }
   pageData.segments.forEach((seg, i) => {
-    const numInput = el('input', { class: 'input seg-num', value: seg.number, maxlength: '7' });
-    const textarea = el('textarea', { class: 'input', rows: '4' });
+    const numInput = el('input', { class: 'input seg-num', value: seg.number, maxlength: '24' });
+    const textarea = el('textarea', { class: 'input', rows: '6' });
     textarea.value = seg.text;
     numInput.addEventListener('change', () => {
-      const fixed = parser.normalizeNumber(numInput.value);
-      if (fixed) { seg.number = fixed; numInput.value = fixed; }
-      else toast('段号需为四位数字、N-M 范围（如 9-10）或 α/Ω');
+      // 识别规则内（四位数字/N-M/α/Ω）自动归一化；其余视为自定义段名，原样保留
+      const v = numInput.value.trim();
+      const fixed = parser.normalizeNumber(v);
+      seg.number = fixed ?? (v || null);
+      numInput.value = fixed ?? v;
     });
     textarea.addEventListener('input', () => { seg.text = textarea.value; });
     editArea.append(el('div', { class: 'card seg-card' },

@@ -132,6 +132,8 @@ html, body {
   font-family: inherit;
 }
 textarea.input { resize: vertical; min-height: 60px; }
+/* 段落编辑弹窗：大文本框，字号稍大便于编辑，仍可手动拖拽调整 */
+textarea.edit-textarea { font-size: 16px; line-height: 1.7; }
 select.input { appearance: auto; }
 
 .new-form { display: flex; gap: 10px; align-items: center; }
@@ -243,6 +245,8 @@ select.input { appearance: auto; }
 
 /* 段落目录（一级导航）：仅段号，紧凑网格 */
 .para-toc { padding: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 8px; }
+/* 自定义段名可能较长：格内自动换行，不撑破网格 */
+.para-toc .toc-item { overflow-wrap: anywhere; text-align: center; }
 .para-toc .toc-item {
   display: flex;
   justify-content: center;
