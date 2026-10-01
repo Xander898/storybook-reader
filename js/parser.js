@@ -57,6 +57,44 @@ export function normalizeNumber(s) {
 }
 
 // ---------------------------------------------------------------------------
+// 章节内段落显示排序：α → 10 以内单数字/范围段（按数值升序）→ Ω → 四位数字段号（升序）
+// → 自定义段名 → 无段号。同组相等时返回 0，由稳定排序保持原有先后。
+// 例：α, 1, 2-3, 4-5, 6, 7-8, 9-10, Ω, 0001, 0002, …, 1388, 【自定义段名】, —
+// ---------------------------------------------------------------------------
+const ORDER_D = '[0-9０-９]';
+const ORDER_FOUR_RE = new RegExp(`^${ORDER_D}{4}$`);
+const ORDER_SMALL_RE = new RegExp(`^(${ORDER_D}{1,2})$`);
+const ORDER_RANGE_RE = new RegExp(`^(${ORDER_D}{1,2})[-—–－一~～](${ORDER_D}{1,2})$`);
+
+function orderKey(number) {
+  if (number == null || number === '') return { group: 5 };       // 无段号
+  const t = String(number).trim();
+  if (t === 'α') return { group: 0 };
+  if (t === 'Ω') return { group: 2 };
+  if (ORDER_FOUR_RE.test(t)) { const n = +fixDigits(t); return { group: 3, start: n, end: n }; }
+  let m = ORDER_SMALL_RE.exec(t);
+  if (m) {
+    const n = +fixDigits(m[1]);
+    if (n >= 1 && n <= 10) return { group: 1, start: n, end: n };
+  }
+  m = ORDER_RANGE_RE.exec(t);
+  if (m) {
+    const a = +fixDigits(m[1]), b = +fixDigits(m[2]);
+    if (a >= 1 && a <= 10 && b >= 1 && b <= 10) return { group: 1, start: a, end: b };
+  }
+  return { group: 4 };                                            // 自定义段名
+}
+
+/** 段号排序比较器：章节段落目录与上一段/下一段导航的显示顺序。 */
+export function compareParagraphNumbers(a, b) {
+  const ka = orderKey(a), kb = orderKey(b);
+  if (ka.group !== kb.group) return ka.group - kb.group;
+  if (ka.start !== kb.start) return ka.start - kb.start;
+  if (ka.end !== kb.end) return ka.end - kb.end;
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // OCR 文本规范化（chi_sim 常在汉字间插空格、数字被拆散，如"查 看 0 0 0 3 段 落"）
 // ---------------------------------------------------------------------------
 

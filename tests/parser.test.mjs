@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fixDigits, parseLineNumber, parsePage, joinText, normalizeOcrText,
-  tokenizeText, stripSpeech, normalizeNumber,
+  tokenizeText, stripSpeech, normalizeNumber, compareParagraphNumbers,
 } from '../js/parser.js';
 
 test('fixDigits 容错替换', () => {
@@ -333,4 +333,22 @@ test('stripSpeech 图标读中文名', () => {
 
 test('normalizeOcrText 保留图标标记（不被噪声剔除）', () => {
   assert.equal(normalizeOcrText('获得〔图标：骰子〕后继续。'), '获得〔图标：骰子〕后继续。');
+});
+
+test('compareParagraphNumbers 章节内排序：α → 10以内升序 → Ω → 四位数字升序 → 自定义 → 无段号', () => {
+  const input = ['0002', 'Ω', 'Boss战', '9-10', '0001', '6', null, '1', '2-3', 'α', '4-5', '7-8', '1388', '0100', '10'];
+  const sorted = [...input].sort(compareParagraphNumbers);
+  assert.deepEqual(sorted, ['α', '1', '2-3', '4-5', '6', '7-8', '9-10', '10', 'Ω', '0001', '0002', '0100', '1388', 'Boss战', null]);
+});
+
+test('compareParagraphNumbers 全角数字与各种连接符', () => {
+  assert.ok(compareParagraphNumbers('２-３', '4-5') < 0);
+  assert.equal(compareParagraphNumbers('9-10', '９—１０'), 0);
+  assert.ok(compareParagraphNumbers('６', '7-8') < 0);
+});
+
+test('compareParagraphNumbers 同组保持稳定序（自定义段名）', () => {
+  const arr = [{ n: 'zz' }, { n: '0001' }, { n: 'aa' }, { n: '0002' }];
+  const sorted = arr.sort((a, b) => compareParagraphNumbers(a.n, b.n));
+  assert.deepEqual(sorted.map((x) => x.n), ['0001', '0002', 'zz', 'aa']);
 });

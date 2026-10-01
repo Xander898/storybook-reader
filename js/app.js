@@ -370,7 +370,7 @@ async function renderParagraphDetail(paraId) {
   if (!p || p.type !== 'text') { nav('#/'); return; }
   const chapter = await db.getChapter(p.chapterId);
   if (!chapter) { nav('#/'); return; }
-  const paras = (await db.listParagraphs(p.chapterId)).filter((x) => x.type === 'text');
+  const paras = await listSortedTextParas(p.chapterId);
   const idx = paras.findIndex((x) => x.id === p.id);
   const voice = await currentVoice();
 
@@ -520,34 +520,25 @@ async function importChapterText(chapterId, text) {
   const page = parser.parsePage(chunks[0].lines.map((t) => ({ text: t })));
   const segs = page.segments.map((s) => ({ ...s }));
   let leading = page.leadingText;
-  let merged = false;
 
   for (let i = 1; i < chunks.length; i++) {
     segs.push({ number: chunks[i].name, text: chunks[i].lines.join('\n').trim() });
   }
 
-  // 跨页续接逻辑与扫描入库一致
-  const pendingP = await db.getPendingParagraph(chapterId);
-  if (pendingP) {
-    if (leading) {
-      await db.updateParagraph(pendingP.id, { text: parser.joinText(pendingP.text, leading) });
-      leading = '';
-      merged = true;
-    }
-    if (segs.length) await db.updateParagraph(pendingP.id, { pending: false });
-  } else if (leading && segs.length) {
+  // 手动导入独立入库：不读取、不拼接、不闭合未闭合段落（跨页拼接只在扫描流程生效）。
+  // 页首孤行没有归属信息，并入本次导入的第一段。
+  if (leading && segs.length) {
     segs[0].text = parser.joinText(leading, segs[0].text);
     leading = '';
   }
-
   if (segs.length) {
-    await db.addParagraphs(chapterId, segs.map((s, i) => ({
-      type: 'text', number: s.number, text: s.text, pending: i === segs.length - 1,
+    await db.addParagraphs(chapterId, segs.map((s) => ({
+      type: 'text', number: s.number, text: s.text, pending: false,
     })));
   } else if (leading) {
-    await db.addParagraphs(chapterId, [{ type: 'text', number: null, text: leading, pending: true }]);
+    await db.addParagraphs(chapterId, [{ type: 'text', number: null, text: leading, pending: false }]);
   }
-  return { count: segs.length, merged };
+  return { count: segs.length };
 }
 
 function showParagraphEditor(p) {
