@@ -48,7 +48,8 @@ let qOnend = null;      // 整段播完 / 被停止时的回调
 let uttGen = 0;         // 代际计数：pause/stop/resume 时递增，使旧 utterance 的回调失效（防竞态）
 
 // 按句末标点切句，一句一块（暂停粒度 = 一句话）；仅相邻极短碎片才合并，避免间隙过多
-function splitIntoChunks(text, minLen = 12) {
+// 本地与云端两个朗读引擎共用同一套切句逻辑
+export function splitIntoChunks(text, minLen = 12) {
   const re = /[^。！？!?；;…\n]*[。！？!?；;…\n]+|[^。！？!?；;…\n]+/g;
   const raw = [];
   let m;

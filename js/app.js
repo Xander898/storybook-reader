@@ -5,6 +5,7 @@ import * as tts from './tts.js';
 import * as ocr from './ocr.js';
 import * as pdfimport from './pdfimport.js';
 import * as cloudocr from './cloudocr.js';
+import * as cloudtts from './cloudtts.js';
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -63,13 +64,19 @@ function confirmDialog(title, msg) {
 }
 
 // ---------------------------------------------------------------------------
-// 设置（语音 / 语速）
+// 设置（语音 / 语速 / 朗读引擎）
 // ---------------------------------------------------------------------------
 const settings = {
   get voiceURI() { return localStorage.getItem('sb-voice') || ''; },
   get rate() { return parseFloat(localStorage.getItem('sb-rate') || '1') || 1; },
   set voiceURI(v) { localStorage.setItem('sb-voice', v); },
   set rate(v) { localStorage.setItem('sb-rate', String(v)); },
+  // 朗读引擎：'local'（浏览器内置，免费离线） | 'cloud'（豆包云端，接近真人）
+  get ttsEngine() { return localStorage.getItem('sb-tts-engine') === 'cloud' ? 'cloud' : 'local'; },
+  set ttsEngine(v) { localStorage.setItem('sb-tts-engine', v); },
+  // 云端音色（cloudtts.CLOUD_VOICES 中的 id）
+  get cloudVoice() { return localStorage.getItem('sb-cloud-voice') || cloudtts.DEFAULT_CLOUD_VOICE; },
+  set cloudVoice(v) { localStorage.setItem('sb-cloud-voice', v); },
   // 识别模式：'cloud'（豆包云端，高准确率）/ 'local'（本地离线）
   get ocrMode() {
     return localStorage.getItem('sb-ocr-mode') === 'local' ? 'local' : 'cloud';
@@ -100,6 +107,7 @@ const routes = [
 async function route() {
   const hash = location.hash || '#/';
   tts.stop();
+  cloudtts.cloudStop(); // 云端朗读不随页面切换继续播放
   for (const r of routes) {
     const m = r.re.exec(hash);
     if (m) {
@@ -434,11 +442,34 @@ async function renderParagraphDetail(paraId) {
     else { speakBtn.textContent = '▶ 朗读本段'; stopBtn.style.display = 'none'; }
   };
   speakBtn.addEventListener('click', () => {
-    if (speakState === 'playing') { tts.pause(); speakState = 'paused'; refreshSpeak(); return; }
-    if (speakState === 'paused') { tts.resume(); speakState = 'playing'; refreshSpeak(); return; }
-    if (!tts.ttsSupported()) { toast('当前浏览器不支持语音朗读'); return; }
+    const useCloud = settings.ttsEngine === 'cloud';
+    if (speakState === 'playing') {
+      (useCloud ? cloudtts.cloudPause() : tts.pause());
+      speakState = 'paused'; refreshSpeak(); return;
+    }
+    if (speakState === 'paused') {
+      (useCloud ? cloudtts.cloudResume() : tts.resume());
+      speakState = 'playing'; refreshSpeak(); return;
+    }
     const text = parser.stripSpeech(p.text);
     if (!text) { toast('本段没有可朗读的文字'); return; }
+    if (useCloud) {
+      const key = cloudocr.getArkKey();
+      if (!key) { toast('云端语音需要 API Key，请在设置中填写'); return; }
+      speakState = 'playing';
+      refreshSpeak();
+      card.classList.add('speaking');
+      cloudtts.cloudSpeak(text, {
+        apiKey: key, speaker: settings.cloudVoice, rate: settings.rate,
+        onend: () => { speakState = 'idle'; card.classList.remove('speaking'); refreshSpeak(); },
+        onerror: (msg) => {
+          speakState = 'idle'; card.classList.remove('speaking'); refreshSpeak();
+          toast('云端语音失败：' + msg);
+        },
+      });
+      return;
+    }
+    if (!tts.ttsSupported()) { toast('当前浏览器不支持语音朗读'); return; }
     if (!voice) { toast('没有可用语音，请在设置中检查'); return; }
     speakState = 'playing';
     refreshSpeak();
@@ -449,7 +480,9 @@ async function renderParagraphDetail(paraId) {
     });
   });
   stopBtn.addEventListener('click', () => {
+    // 两个引擎都停，覆盖「朗读中途切换引擎」的边缘情况
     tts.stop();
+    cloudtts.cloudStop();
     speakState = 'idle';
     card.classList.remove('speaking');
     refreshSpeak();
@@ -1080,21 +1113,71 @@ async function renderSettings() {
     rateLabel.textContent = `当前 ${settings.rate.toFixed(1)}x`;
   });
 
+  // ——— 朗读引擎：浏览器内置（免费离线）/ 豆包云端（接近真人，按量计费） ———
+  const engineSel = el('select', { class: 'input' });
+  engineSel.append(
+    el('option', { value: 'local' }, '浏览器内置（免费离线，音质看设备）'),
+    el('option', { value: 'cloud' }, '豆包云端（接近真人，需联网）'),
+  );
+  engineSel.value = settings.ttsEngine;
+
+  const cloudVoiceSel = el('select', { class: 'input' });
+  for (const cv of cloudtts.CLOUD_VOICES) cloudVoiceSel.append(el('option', { value: cv.id }, cv.name));
+  cloudVoiceSel.value = settings.cloudVoice;
+  cloudVoiceSel.addEventListener('change', () => { settings.cloudVoice = cloudVoiceSel.value; toast('云端音色已保存'); });
+
+  const localVoiceRow = el('div', {}, el('label', {}, '本地语音'), voiceSel);
+  const cloudVoiceRow = el('div', {}, el('label', {}, '云端音色'), cloudVoiceSel);
+  const syncVoiceRows = () => {
+    const cloud = engineSel.value === 'cloud';
+    localVoiceRow.style.display = cloud ? 'none' : '';
+    cloudVoiceRow.style.display = cloud ? '' : 'none';
+  };
+  engineSel.addEventListener('change', () => {
+    if (engineSel.value === 'cloud' && !cloudocr.getArkKey()) {
+      toast('云端语音需先在下方「识别」区填写并保存 API Key');
+      engineSel.value = 'local';
+      return;
+    }
+    settings.ttsEngine = engineSel.value;
+    syncVoiceRows();
+    toast(engineSel.value === 'cloud' ? '已切换到豆包云端语音' : '已切换到浏览器内置语音');
+  });
+  syncVoiceRows();
+
   const testBtn = el('button', {
     class: 'btn',
-    onclick: async () => {
-      const voice = await currentVoice();
-      tts.speak('你好，这是一段朗读测试。', { voice, rate: settings.rate });
+    onclick: () => {
+      if (settings.ttsEngine === 'cloud') {
+        const key = cloudocr.getArkKey();
+        if (!key) { toast('云端语音需要 API Key，请在下方填写'); return; }
+        const ok = cloudtts.cloudSpeak('你好，这是豆包云端语音，试试长文朗读效果。', {
+          apiKey: key, speaker: settings.cloudVoice, rate: settings.rate,
+          onerror: (msg) => toast('云端语音失败：' + msg),
+        });
+        if (!ok) toast('没有可朗读的内容');
+      } else {
+        currentVoice().then((voice) => {
+          tts.speak('你好，这是一段朗读测试。', { voice, rate: settings.rate });
+        });
+      }
     },
   }, '▶ 试听语音');
 
   v.append(el('div', { class: 'card settings-card' },
     el('h3', {}, '朗读'),
-    el('label', {}, '朗读语音'),
-    voiceSel,
+    el('label', {}, '朗读引擎'),
+    engineSel,
+    localVoiceRow,
+    cloudVoiceRow,
     el('div', { class: 'rate-row' }, el('label', {}, '语速'), rateInput, rateLabel),
     testBtn,
-    !tts.ttsSupported() ? el('p', { class: 'warn' }, '当前浏览器不支持语音合成') : null,
+    settings.ttsEngine === 'cloud'
+      ? el('p', { class: 'muted' }, '云端语音与识别共用下方 API Key，按量计费（有免费额度）；「流畅女声」专为长文朗读优化。切换章节或页面会自动停止播放。')
+      : el('p', { class: 'muted' }, '追求更自然的朗读可切换到豆包云端引擎（需 API Key，按量计费）。'),
+    !tts.ttsSupported() && settings.ttsEngine === 'local'
+      ? el('p', { class: 'warn' }, '当前浏览器不支持语音合成，建议使用云端引擎')
+      : null,
   ));
 
   // ——— 识别（豆包云端 / 本地） ———
