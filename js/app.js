@@ -1086,6 +1086,29 @@ async function fastImportRemaining() {
 // ---------------------------------------------------------------------------
 // 设置
 // ---------------------------------------------------------------------------
+/** 免费提升本地朗读音质的指引：安装系统级增强语音（iOS / 安卓），装完在「本地语音」里选用 */
+function showVoiceHelpModal() {
+  showModal('安装免费的高质量语音',
+    el('div', { class: 'voice-help' },
+      el('p', { class: 'muted' }, '「本地语音」的音质取决于手机系统语音包，而系统自带的免费增强语音其实已经相当自然。按下面步骤装一次，之后回到本页在「本地语音」中选择新音色即可，完全免费、离线可用。'),
+      el('h4', {}, 'iPhone / iPad（Safari 及所有浏览器通用）'),
+      el('ol', {},
+        el('li', {}, '系统「设置」→「辅助功能」→「朗读内容」→「声音」'),
+        el('li', {}, '选「中文」，下载增值音色：婷婷（女声，推荐）、安然（男声）等'),
+        el('li', {}, '回到本 App → 设置 → 朗读 → 本地语音，选择刚下载的音色'),
+      ),
+      el('h4', {}, '安卓（Chrome / Edge 等标准浏览器）'),
+      el('ol', {},
+        el('li', {}, '系统「设置」→「语言和输入法」→「文字转语音（TTS）输出」'),
+        el('li', {}, '首选引擎换成本机厂商的云语音（华为 / 小米 / OPPO / vivo 一般自带且免费），或从应用商店安装「讯飞语音+」'),
+        el('li', {}, '装好后回到本页，「本地语音」下拉里选择新出现的音色'),
+      ),
+      el('span', { class: 'warn' }, '微信内置浏览器往往没有可用朗读语音，请用 Chrome / Edge / Safari 打开本页面。'),
+    ),
+    [{ label: '知道了', class: 'primary', onclick: (o) => o.remove() }],
+  );
+}
+
 async function renderSettings() {
   setHeader('设置');
   setBottomNav('settings');
@@ -1172,9 +1195,10 @@ async function renderSettings() {
     cloudVoiceRow,
     el('div', { class: 'rate-row' }, el('label', {}, '语速'), rateInput, rateLabel),
     testBtn,
+    el('button', { class: 'btn', onclick: showVoiceHelpModal }, '📚 如何让本地语音更自然（免费）'),
     settings.ttsEngine === 'cloud'
       ? el('p', { class: 'muted' }, '云端语音与识别共用下方 API Key，按量计费（有免费额度）；「流畅女声」专为长文朗读优化。切换章节或页面会自动停止播放。')
-      : el('p', { class: 'muted' }, '追求更自然的朗读可切换到豆包云端引擎（需 API Key，按量计费）。'),
+      : el('p', { class: 'muted' }, '本地语音完全免费离线；觉得机械就点上面按钮装系统增强语音，还是不满意再考虑云端引擎。'),
     !tts.ttsSupported() && settings.ttsEngine === 'local'
       ? el('p', { class: 'warn' }, '当前浏览器不支持语音合成，建议使用云端引擎')
       : null,

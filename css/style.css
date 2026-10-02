@@ -185,6 +185,12 @@ select.input { appearance: auto; }
 .modal-actions { display: flex; gap: 10px; margin-top: 14px; }
 .modal-actions .btn { flex: 1; }
 
+/* 免费语音安装指引（设置 → 朗读） */
+.voice-help h4 { margin: 14px 0 2px; font-size: 15px; }
+.voice-help ol { margin: 2px 0 8px; padding-left: 20px; }
+.voice-help li { font-size: 13.5px; margin: 5px 0; line-height: 1.5; }
+.voice-help .warn { display: block; margin-top: 10px; }
+
 /* ---------- 书架 ---------- */
 .book-card {
   display: flex;
